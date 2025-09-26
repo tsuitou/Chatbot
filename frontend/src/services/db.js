@@ -119,7 +119,45 @@ function manualDeepClone(value) {
 
 let structuredCloneWarningShown = false
 
+function shouldBypassStructuredClone(value, seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object') {
+    return false
+  }
+
+  if (
+    (typeof Blob !== 'undefined' && value instanceof Blob) ||
+    (typeof File !== 'undefined' && value instanceof File)
+  ) {
+    return true
+  }
+
+  if (seen.has(value)) {
+    return false
+  }
+  seen.add(value)
+
+  if (Array.isArray(value)) {
+    return value.some((item) => shouldBypassStructuredClone(item, seen))
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  const isPlainObject = prototype === Object.prototype || prototype === null
+  if (!isPlainObject) {
+    return true
+  }
+
+  for (const [, nested] of Object.entries(value)) {
+    if (shouldBypassStructuredClone(nested, seen)) {
+      return true
+    }
+  }
+  return false
+}
+
 const deepClone = (input) => {
+  if (shouldBypassStructuredClone(input)) {
+    return manualDeepClone(input)
+  }
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(input)

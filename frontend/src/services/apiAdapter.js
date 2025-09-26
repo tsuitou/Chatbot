@@ -1,12 +1,5 @@
 import { getDefaultProviderId, getProviderById } from './providers'
 
-// --- Helpers ---
-
-/**
- * Convert a Blob into a Base64 string asynchronously.
- * @param {Blob} blob
- * @returns {Promise<string>}
- */
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
