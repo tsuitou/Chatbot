@@ -26,6 +26,7 @@ yarn-error.log*
 # IDE / Editor specific
 .vscode
 .idea
+.claude
 
 # Windows alternate data streams
 *:Zone.Identifier
