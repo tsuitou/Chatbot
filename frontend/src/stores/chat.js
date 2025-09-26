@@ -976,12 +976,19 @@ export const useChatStore = defineStore('chat', {
         ...(fallbackConfig.tools || {}),
         ...(currentConfig.tools || {}),
       }
+      const streamingPreference =
+        currentConfig.streaming ??
+        fallbackConfig.streaming ??
+        this.composerState.streamingEnabled
+
       const requestConfig = {
         ...fallbackConfig,
         ...currentConfig,
         tools: mergedTools,
-        streaming: true,
+        streaming: streamingPreference ?? true,
       }
+
+      requestConfig.streaming = !!requestConfig.streaming
 
       if (!requestConfig.model) {
         showErrorToast('Please select a model before resending.')
