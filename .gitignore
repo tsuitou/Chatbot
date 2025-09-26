@@ -1,10 +1,6 @@
-# Ignore everything in the root directory
-/*
-# Except for the directories we want to track
-!/frontend
-!/backend
-# And the .gitignore file itself
-!/.gitignore
+# Specific files to ignore
+/CLAUDE.md
+/AGENTS.md
 
 # Dependencies
 /node_modules
