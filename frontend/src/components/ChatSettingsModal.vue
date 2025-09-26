@@ -42,9 +42,10 @@
                   <label class="form-label" for="response-transforms"
                     >Replacement / Removal Rules</label
                   >
-									<p class="form-hint">
-										One rule per line. Quotes are required around the target text.
-									</p>
+                  <p class="form-hint">
+                    One rule per line. Quotes are required around the target
+                    text.
+                  </p>
                 </div>
                 <textarea
                   id="response-transforms"
@@ -53,23 +54,23 @@
                   rows="6"
                   placeholder='replace "from" -> "to"&#10;remove "literal"'
                 ></textarea>
-                  <span
-                    class="transform-status"
-                    :class="`is-${transformStatus.state}`"
-                    role="status"
-                    aria-live="polite"
-                  >
-                    <font-awesome-icon :icon="transformStatus.icon" />
-                    <span class="transform-status-text">
-                      {{ transformStatus.message }}
-                      <span
-                        v-if="transformStatus.hint"
-                        class="transform-status-hint"
-                      >
-                        {{ transformStatus.hint }}
-                      </span>
+                <span
+                  class="transform-status"
+                  :class="`is-${transformStatus.state}`"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <font-awesome-icon :icon="transformStatus.icon" />
+                  <span class="transform-status-text">
+                    {{ transformStatus.message }}
+                    <span
+                      v-if="transformStatus.hint"
+                      class="transform-status-hint"
+                    >
+                      {{ transformStatus.hint }}
                     </span>
                   </span>
+                </span>
                 <ul v-if="transformErrors.length" class="error-list">
                   <li v-for="error in transformErrors" :key="error.line">
                     Line {{ error.line }}: {{ error.content }}
