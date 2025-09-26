@@ -85,6 +85,7 @@
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { getFileTypeIcon } from '../utils/fileIcons'
+import { BlobUrlManager } from '../utils/blobUrlManager'
 const props = defineProps({
   messageId: {
     type: String,
@@ -140,18 +141,11 @@ const attachments = computed(() => store.editorBucket?.items ?? [])
 
 const isDragging = computed(() => dragCounter.value > 0)
 
-const thumbnailUrls = new Map()
+const thumbnailManager = new BlobUrlManager()
 
 const getThumbnailUrl = (attachment) => {
   if (!attachment || !attachment.mimeType?.startsWith('image/')) return null
-  const existing = thumbnailUrls.get(attachment.id)
-  if (existing) return existing
-  if (attachment.blob) {
-    const url = URL.createObjectURL(attachment.blob)
-    thumbnailUrls.set(attachment.id, url)
-    return url
-  }
-  return null
+  return thumbnailManager.get(attachment.id)
 }
 
 onMounted(() => {
@@ -182,30 +176,17 @@ watch(
     scheduleHeightAdjustment()
     const nextList = Array.isArray(next) ? next : []
     const keepIds = new Set()
+
     for (const att of nextList) {
       if (!att?.id) continue
       keepIds.add(att.id)
-      if (
-        att.mimeType?.startsWith('image/') &&
-        att.blob &&
-        !thumbnailUrls.has(att.id)
-      ) {
-        thumbnailUrls.set(att.id, URL.createObjectURL(att.blob))
-      }
-      if (
-        (!att.blob || !att.mimeType?.startsWith('image/')) &&
-        thumbnailUrls.has(att.id)
-      ) {
-        URL.revokeObjectURL(thumbnailUrls.get(att.id))
-        thumbnailUrls.delete(att.id)
+
+      if (att.mimeType?.startsWith('image/') && att.blob) {
+        thumbnailManager.create(att.id, att.blob)
       }
     }
-    for (const [id, url] of thumbnailUrls) {
-      if (!keepIds.has(id)) {
-        URL.revokeObjectURL(url)
-        thumbnailUrls.delete(id)
-      }
-    }
+
+    thumbnailManager.cleanup(keepIds)
   },
   { deep: true, immediate: true }
 )
@@ -351,10 +332,7 @@ onUnmounted(() => {
     textarea.style.height = ''
     textarea.style.overflowY = ''
   }
-  for (const [, url] of thumbnailUrls) {
-    URL.revokeObjectURL(url)
-  }
-  thumbnailUrls.clear()
+  thumbnailManager.clear()
 })
 </script>
 

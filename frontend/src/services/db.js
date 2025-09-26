@@ -141,7 +141,10 @@ function buildChatAttachmentRange(chatId) {
 }
 
 function buildAutoMessageRange(chatId) {
-  return IDBKeyRange.bound([chatId, '', -Infinity], [chatId, '\uffff', Infinity])
+  return IDBKeyRange.bound(
+    [chatId, '', -Infinity],
+    [chatId, '\uffff', Infinity]
+  )
 }
 
 function cloneAttachmentForChat(original, chatId, messageId) {
@@ -303,18 +306,52 @@ async function replaceAttachments(
   }
 }
 
-async function hydrateAttachments(store, message) {
-  const range = IDBKeyRange.bound(
-    [message.id, -Infinity],
-    [message.id, Infinity]
-  )
-  const attachments = await store.index(IDX_ATTACHMENT_BY_MESSAGE).getAll(range)
-  return {
-    ...message,
-    attachments: (attachments || []).sort(
-      (a, b) => (a?.order ?? 0) - (b?.order ?? 0)
-    ),
+function buildAttachmentLookup(rawAttachments) {
+  const map = new Map()
+  for (const attachment of rawAttachments || []) {
+    if (!attachment?.messageId) continue
+    if (attachment.type !== TYPE_ATTACHMENT) continue
+    const bucket = map.get(attachment.messageId)
+    if (bucket) {
+      bucket.push(attachment)
+    } else {
+      map.set(attachment.messageId, [attachment])
+    }
   }
+  for (const bucket of map.values()) {
+    bucket.sort((a, b) => (a?.order ?? 0) - (b?.order ?? 0))
+  }
+  return map
+}
+
+function withAttachments(record, attachmentLookup) {
+  const attachments = attachmentLookup.get(record.id) || []
+  return {
+    ...record,
+    attachments: attachments.slice(),
+  }
+}
+
+function hydrateMessageRecords(records, attachmentLookup) {
+  const hydrated = []
+  for (const record of records || []) {
+    if (record?.type !== TYPE_MESSAGE) continue
+    hydrated.push(withAttachments(record, attachmentLookup))
+  }
+  return hydrated
+}
+
+function organizeAutoMessages(records, attachmentLookup) {
+  const buckets = { pre: [], post: [] }
+  for (const record of records || []) {
+    if (record?.type !== TYPE_AUTO_MESSAGE) continue
+    const hydrated = withAttachments(record, attachmentLookup)
+    const bucket = hydrated.location === 'post' ? buckets.post : buckets.pre
+    bucket.push({ ...hydrated, attachments: hydrated.attachments || [] })
+  }
+  buckets.pre.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+  buckets.post.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+  return buckets
 }
 
 async function ensureChat(store, chatId) {
@@ -353,31 +390,6 @@ function normalizeAutoMessage(chatId, input) {
     createdAt,
     updatedAt: input.updatedAt ?? createdAt,
   }
-}
-
-async function hydrateAutoMessage(store, record) {
-  const hydrated = await hydrateAttachments(store, record)
-  return {
-    ...hydrated,
-    attachments: hydrated.attachments || [],
-  }
-}
-
-async function fetchAutoMessages(store, chatId) {
-  const range = buildAutoMessageRange(chatId)
-  const rawRecords = await store
-    .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
-    .getAll(range)
-  const result = { pre: [], post: [] }
-  for (const record of rawRecords || []) {
-    if (record.type !== TYPE_AUTO_MESSAGE) continue
-    const hydrated = await hydrateAutoMessage(store, record)
-    const bucket = hydrated.location === 'post' ? result.post : result.pre
-    bucket.push(hydrated)
-  }
-  result.pre.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-  result.post.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
-  return result
 }
 
 export async function getChatList() {
@@ -441,17 +453,23 @@ export async function getChatDetails(chatId) {
     return null
   }
 
-  const range = IDBKeyRange.bound([chatId, -Infinity], [chatId, Infinity])
-  const rawMessages = await store
-    .index(IDX_MESSAGE_BY_CHAT_SEQUENCE)
-    .getAll(range)
-  const messages = []
-  for (const rec of rawMessages || []) {
-    if (rec.type !== TYPE_MESSAGE) continue
-    const hydrated = await hydrateAttachments(store, rec)
-    messages.push(hydrated)
-  }
-  const autoMessages = await fetchAutoMessages(store, chatId)
+  const messageRange = IDBKeyRange.bound(
+    [chatId, -Infinity],
+    [chatId, Infinity]
+  )
+  const [rawMessages, rawAutoMessages, rawAttachments] = await Promise.all([
+    store.index(IDX_MESSAGE_BY_CHAT_SEQUENCE).getAll(messageRange),
+    store
+      .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
+      .getAll(buildAutoMessageRange(chatId)),
+    store
+      .index(IDX_ATTACHMENT_BY_CHAT)
+      .getAll(buildChatAttachmentRange(chatId)),
+  ])
+
+  const attachmentLookup = buildAttachmentLookup(rawAttachments)
+  const messages = hydrateMessageRecords(rawMessages, attachmentLookup)
+  const autoMessages = organizeAutoMessages(rawAutoMessages, attachmentLookup)
   await tx.done
   return { ...chat, messages, autoMessages }
 }
@@ -460,7 +478,16 @@ export async function getAutoMessages(chatId) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readonly')
   const store = tx.store
-  const autoMessages = await fetchAutoMessages(store, chatId)
+  const [rawAutoMessages, rawAttachments] = await Promise.all([
+    store
+      .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
+      .getAll(buildAutoMessageRange(chatId)),
+    store
+      .index(IDX_ATTACHMENT_BY_CHAT)
+      .getAll(buildChatAttachmentRange(chatId)),
+  ])
+  const attachmentLookup = buildAttachmentLookup(rawAttachments)
+  const autoMessages = organizeAutoMessages(rawAutoMessages, attachmentLookup)
   await tx.done
   return autoMessages
 }
