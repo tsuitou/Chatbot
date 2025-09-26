@@ -628,7 +628,6 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: 8px;
 }
 
 .attachment-chip {
