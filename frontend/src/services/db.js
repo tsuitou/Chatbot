@@ -559,12 +559,25 @@ export async function deleteAutoMessages(chatId) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readwrite')
   const store = tx.store
-  const records = await store
-    .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
-    .getAll(buildAutoMessageRange(chatId))
+  const [records, attachments] = await Promise.all([
+    store
+      .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
+      .getAll(buildAutoMessageRange(chatId)),
+    store.index(IDX_ATTACHMENT_BY_CHAT).getAll(
+      buildChatAttachmentRange(chatId)
+    ),
+  ])
 
-  for (const record of records) {
-    await deleteAttachmentsForMessage(store, record.id)
+  const attachmentLookup = buildAttachmentLookup(attachments)
+
+  for (const record of records || []) {
+    const bucket = attachmentLookup.get(record.id)
+    if (bucket) {
+      for (const att of bucket) {
+        await store.delete(att.id)
+      }
+      attachmentLookup.delete(record.id)
+    }
     await store.delete(record.id)
   }
 
@@ -650,22 +663,28 @@ export async function deleteChat(chatId) {
     await tx.done
     return
   }
-  const range = buildChatAttachmentRange(chatId)
-  const related = await store.index(IDX_ATTACHMENT_BY_CHAT).getAll(range)
-  for (const rec of related || []) {
-    await store.delete(rec.id)
+  const [attachments, messages, autoMessages] = await Promise.all([
+    store.index(IDX_ATTACHMENT_BY_CHAT).getAll(
+      buildChatAttachmentRange(chatId)
+    ),
+    store.index(IDX_MESSAGE_BY_CHAT).getAll(chatId),
+    store
+      .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
+      .getAll(buildAutoMessageRange(chatId)),
+  ])
+
+  for (const attachment of attachments || []) {
+    await store.delete(attachment.id)
   }
-  const messages = await store.index(IDX_MESSAGE_BY_CHAT).getAll(chatId)
+
   for (const msg of messages || []) {
     await store.delete(msg.id)
   }
-  const autoMessages = await store
-    .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
-    .getAll(buildAutoMessageRange(chatId))
-  for (const autoMsg of autoMessages) {
-    await deleteAttachmentsForMessage(store, autoMsg.id)
+
+  for (const autoMsg of autoMessages || []) {
     await store.delete(autoMsg.id)
   }
+
   await store.delete(chatId)
   await tx.done
 }
