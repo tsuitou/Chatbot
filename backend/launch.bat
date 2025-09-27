@@ -6,7 +6,7 @@ chcp 65001 > NUL
 setlocal ENABLEEXTENSIONS
 
 REM === Configuration ===
-set "URL=http://localhost:3001/chatbot"
+set "URL=http://localhost:15101/chatbot"
 set "MAX_RETRIES=60"
 
 REM === Prerequisites Check ===

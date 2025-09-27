@@ -368,7 +368,7 @@ rl.on('line', (input) => {
 });
 
 // --- Start server ---
-const PORT = process.env.PORT || 3001
+const PORT = process.env.PORT || 15101
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
 	console.log('Type "rs" and press Enter to reload config.');

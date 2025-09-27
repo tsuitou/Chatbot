@@ -3,7 +3,7 @@
 # This script automatically installs dependencies if needed and starts the server
 
 # Configuration
-URL="http://localhost:3001/chatbot"
+URL="http://localhost:15101/chatbot"
 MAX_RETRIES=60
 
 echo "Starting Chatbot Server..."

@@ -189,6 +189,7 @@ pre,
 code {
   margin: 0;
   padding: 0;
+  padding-bottom: 12px; /* Extra space for horizontal scrollbar */
   background: none;
   font-family: 'Courier New', Courier, monospace;
   font-size: 14px;
