@@ -94,6 +94,24 @@ function resolveApiKey() {
   const envKey = (process.env.GEMINI_API_KEY || '').trim()
   if (envKey) return envKey
 
+  // First check for key_valid files
+  const validCandidatePaths = [
+    path.resolve(process.cwd(), 'key_valid'),
+    path.resolve(runtimeDirname, 'key_valid'),
+  ]
+
+  for (const keyPath of validCandidatePaths) {
+    try {
+      if (fs.existsSync(keyPath)) {
+        const raw = fs.readFileSync(keyPath, 'utf-8').trim()
+        if (raw) return raw
+      }
+    } catch (error) {
+      console.warn(`Failed to read API key from ${keyPath}:`, error)
+    }
+  }
+
+  // Then check for regular key files and rename them if they contain valid keys
   const candidatePaths = [
     path.resolve(process.cwd(), 'key'),
     path.resolve(runtimeDirname, 'key'),
@@ -103,7 +121,17 @@ function resolveApiKey() {
     try {
       if (fs.existsSync(keyPath)) {
         const raw = fs.readFileSync(keyPath, 'utf-8').trim()
-        if (raw) return raw
+        if (raw && raw.length > 10) { // Basic check for non-empty key
+          // Rename key to key_valid to prevent accidental distribution
+          const validKeyPath = keyPath.replace(/key$/, 'key_valid')
+          try {
+            fs.renameSync(keyPath, validKeyPath)
+            console.log(`Renamed ${path.basename(keyPath)} to ${path.basename(validKeyPath)} for security`)
+          } catch (renameError) {
+            console.warn(`Could not rename key file: ${renameError.message}`)
+          }
+          return raw
+        }
       }
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
