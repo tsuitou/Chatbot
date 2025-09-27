@@ -1,6 +1,7 @@
 <template>
   <div
     class="edit-area-wrapper"
+    :style="{ visibility: isReady ? 'visible' : 'hidden' }"
     @dragenter.prevent="onDragEnter"
     @dragover.prevent
     @dragleave.prevent="onDragLeave"
@@ -63,6 +64,7 @@
         rows="1"
         @keydown.tab.exact.prevent="handleTab"
         @keydown.shift.tab.prevent="handleShiftTab"
+        @keydown.ctrl.enter.prevent="handleSave"
       ></textarea>
       <div class="action-buttons">
         <input
@@ -93,15 +95,19 @@ const props = defineProps({
   },
 })
 
+const emit = defineEmits(['ready'])
+
 const store = useChatStore()
 const fileInput = ref(null)
 const textInput = ref(null)
 const dragCounter = ref(0)
+const isReady = ref(false)
 
 const adjustTextHeight = () => {
   const textarea = textInput.value
   if (!textarea) return
 
+  const beforeHeight = textarea.style.height
   textarea.style.height = 'auto'
 
   const style = window.getComputedStyle(textarea)
@@ -120,6 +126,7 @@ const adjustTextHeight = () => {
   if (needsHorizontalScroll && scrollbarHeight > 0) {
     textarea.style.height = `${baseHeight + scrollbarHeight}px`
   }
+
 }
 
 const scheduleHeightAdjustment = () => {
@@ -153,7 +160,26 @@ onMounted(() => {
   if (store.editingState?.messageId !== props.messageId) {
     store.startEditing(props.messageId)
   }
+
+  // Calculate initial height based on text content
+  const text = store.editingState?.draftText || ''
+  const lines = Math.max(text.split('\n').length, 1)
+  const lineHeight = 21
+  const padding = 20
+  const initialHeight = lines * lineHeight + padding
+
+  if (textInput.value) {
+    textInput.value.style.height = `${initialHeight}px`
+  }
+
   scheduleHeightAdjustment()
+
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      isReady.value = true
+      emit('ready')
+    })
+  })
 })
 
 watch(

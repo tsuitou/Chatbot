@@ -141,7 +141,7 @@
         </div>
       </div>
 
-      <EditArea v-else-if="isEditing" :message-id="messageId" />
+      <EditArea v-if="isEditing" :message-id="messageId" @ready="editAreaReady = true" />
 
       <div
         v-if="group.content.attachments.length && !isEditing"
@@ -211,6 +211,13 @@ const actionsDisabled = computed(() => chatStore.isGenerating)
 const isEditing = computed(
   () => chatStore.editingState?.messageId === messageId.value
 )
+const editAreaReady = ref(false)
+
+watch(isEditing, (newVal) => {
+  if (!newVal) {
+    editAreaReady.value = false
+  }
+})
 const isStreaming = computed(
   () =>
     props.group.system.status === 'streaming' ||
@@ -300,7 +307,7 @@ const isContentReady = computed(() => {
 })
 
 const shouldShowContentBubble = computed(() => {
-  if (isEditing.value) return false
+  if (isEditing.value && editAreaReady.value) return false
   if (isUserMessage.value) return true
   return isContentReady.value
 })

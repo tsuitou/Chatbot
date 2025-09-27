@@ -146,6 +146,14 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
     return true
   }
 
+  // Check for Vue reactive objects (Proxy)
+  if (value.toString().includes('[object Object]') &&
+      Object.getOwnPropertyNames(value).length > 0 &&
+      typeof value.__v_isRef === 'undefined' &&
+      Object.getOwnPropertyDescriptor(value, Object.getOwnPropertyNames(value)[0])?.get) {
+    return true
+  }
+
   for (const [, nested] of Object.entries(value)) {
     if (shouldBypassStructuredClone(nested, seen)) {
       return true
@@ -154,20 +162,45 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
   return false
 }
 
+function toPlainObject(obj, seen = new WeakSet()) {
+  if (obj === null || typeof obj !== 'object') {
+    return obj
+  }
+
+  if (seen.has(obj)) {
+    return obj // Avoid infinite recursion
+  }
+  seen.add(obj)
+
+  if (Array.isArray(obj)) {
+    return obj.map(item => toPlainObject(item, seen))
+  }
+
+  const plain = {}
+  for (const [key, value] of Object.entries(obj)) {
+    plain[key] = toPlainObject(value, seen)
+  }
+  return plain
+}
+
 const deepClone = (input) => {
   if (shouldBypassStructuredClone(input)) {
     return manualDeepClone(input)
   }
+
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(input)
     } catch (error) {
-      if (!structuredCloneWarningShown) {
-        structuredCloneWarningShown = true
-        console.warn(
-          'structuredClone failed, falling back to manual cloning.',
-          error
-        )
+      // Convert reactive objects to plain objects and retry
+      const plainInput = toPlainObject(input)
+      try {
+        return structuredClone(plainInput)
+      } catch (retryError) {
+        if (!structuredCloneWarningShown) {
+          structuredCloneWarningShown = true
+          console.warn('structuredClone failed twice, falling back to manual cloning.')
+        }
       }
     }
   }

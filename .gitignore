@@ -9,12 +9,16 @@
 
 # Secrets
 backend/key
+backend/key_valid
 
 # Uploads
 /backend/uploads/
 
 # Release artifacts
 /releases/
+
+# Context files
+compact_context.txt
 
 # SEA build artifacts
 /backend/chatbot.exe

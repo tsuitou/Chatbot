@@ -140,19 +140,19 @@ const renderContent = async () => {
   white-space: pre;
   overflow: auto;
   width: auto;
+  position: relative;
 }
 .code-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background-color: var(--text-light);
+  background-color: var(--bg-light);
   padding: 4px 12px;
-  color: #ccc;
   font-size: 12px;
 }
 .language-name {
   font-family: monospace;
-  color: var(--bg-gray);
+  color: var(--text-light);
 }
 .actions {
   display: flex;
@@ -160,20 +160,21 @@ const renderContent = async () => {
 }
 .action-btn {
   background: none;
-  border: 1px solid var(--bg-gray);
-  color: var(--bg-gray);
-  padding: 2px 8px;
+  border: none;
+  color: var(--text-light);
+  padding: 4px 8px;
   border-radius: 4px;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  transition: var(--transition);
+  transition: all 0.2s ease;
+  opacity: 0.7;
 }
 .action-btn:hover {
-  background-color: var(--text-color);
-  color: var(--bg-color);
+  opacity: 1;
+  background-color: rgba(255, 255, 255, 0.1);
 }
 .code-content {
   background-color: var(--bg-light);
