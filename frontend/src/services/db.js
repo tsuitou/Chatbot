@@ -147,10 +147,13 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
   }
 
   // Check for Vue reactive objects (Proxy)
-  if (value.toString().includes('[object Object]') &&
-      Object.getOwnPropertyNames(value).length > 0 &&
-      typeof value.__v_isRef === 'undefined' &&
-      Object.getOwnPropertyDescriptor(value, Object.getOwnPropertyNames(value)[0])?.get) {
+  if (
+    value.toString().includes('[object Object]') &&
+    Object.getOwnPropertyNames(value).length > 0 &&
+    typeof value.__v_isRef === 'undefined' &&
+    Object.getOwnPropertyDescriptor(value, Object.getOwnPropertyNames(value)[0])
+      ?.get
+  ) {
     return true
   }
 
@@ -173,7 +176,7 @@ function toPlainObject(obj, seen = new WeakSet()) {
   seen.add(obj)
 
   if (Array.isArray(obj)) {
-    return obj.map(item => toPlainObject(item, seen))
+    return obj.map((item) => toPlainObject(item, seen))
   }
 
   const plain = {}
@@ -199,7 +202,9 @@ const deepClone = (input) => {
       } catch (retryError) {
         if (!structuredCloneWarningShown) {
           structuredCloneWarningShown = true
-          console.warn('structuredClone failed twice, falling back to manual cloning.')
+          console.warn(
+            'structuredClone failed twice, falling back to manual cloning.'
+          )
         }
       }
     }
@@ -634,9 +639,9 @@ export async function deleteAutoMessages(chatId) {
     store
       .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)
       .getAll(buildAutoMessageRange(chatId)),
-    store.index(IDX_ATTACHMENT_BY_CHAT).getAll(
-      buildChatAttachmentRange(chatId)
-    ),
+    store
+      .index(IDX_ATTACHMENT_BY_CHAT)
+      .getAll(buildChatAttachmentRange(chatId)),
   ])
 
   const attachmentLookup = buildAttachmentLookup(attachments)
@@ -735,9 +740,9 @@ export async function deleteChat(chatId) {
     return
   }
   const [attachments, messages, autoMessages] = await Promise.all([
-    store.index(IDX_ATTACHMENT_BY_CHAT).getAll(
-      buildChatAttachmentRange(chatId)
-    ),
+    store
+      .index(IDX_ATTACHMENT_BY_CHAT)
+      .getAll(buildChatAttachmentRange(chatId)),
     store.index(IDX_MESSAGE_BY_CHAT).getAll(chatId),
     store
       .index(IDX_AUTO_MESSAGE_BY_CHAT_LOCATION)

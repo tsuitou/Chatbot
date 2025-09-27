@@ -141,7 +141,11 @@
         </div>
       </div>
 
-      <EditArea v-if="isEditing" :message-id="messageId" @ready="editAreaReady = true" />
+      <EditArea
+        v-if="isEditing"
+        :message-id="messageId"
+        @ready="editAreaReady = true"
+      />
 
       <div
         v-if="group.content.attachments.length && !isEditing"
@@ -171,7 +175,6 @@ import { useChatStore } from '../stores/chat'
 import { useDisplayStore } from '../stores/display'
 import CodeBlock from './CodeBlock.vue'
 import EditArea from './EditArea.vue'
-import 'katex/dist/katex.min.css'
 const emit = defineEmits(['edit', 'resend', 'delete'])
 
 const props = defineProps({
