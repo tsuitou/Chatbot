@@ -107,7 +107,8 @@ const adjustTextHeight = () => {
   const style = window.getComputedStyle(textarea)
   const borderTop = parseFloat(style.borderTopWidth) || 0
   const borderBottom = parseFloat(style.borderBottomWidth) || 0
-  const baseHeight = textarea.scrollHeight + borderTop + borderBottom
+  const lineHeight = parseFloat(style.lineHeight) || 21
+  const baseHeight = textarea.scrollHeight + borderTop + borderBottom + lineHeight
 
   textarea.style.height = `${baseHeight}px`
   textarea.style.overflowY = 'hidden'
