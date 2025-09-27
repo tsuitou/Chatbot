@@ -13,6 +13,9 @@ backend/key
 # Uploads
 /backend/uploads/
 
+# Release artifacts
+/releases/
+
 # SEA build artifacts
 /backend/chatbot.exe
 /backend/server.sea
