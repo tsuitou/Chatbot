@@ -41,7 +41,6 @@ socket.on('chunk', (rawChunk) => {
 
 socket.on('end_generation', (result) => {
   initializeStore()
-  console.log('Generation finished:', result)
   store.handleStreamEnd(result)
 })
 

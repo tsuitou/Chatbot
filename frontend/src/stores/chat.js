@@ -544,6 +544,7 @@ export const useChatStore = defineStore('chat', {
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
         this._appendMessage(modelMessage)
+        this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
           messageId: modelMessage.id,
