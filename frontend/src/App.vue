@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import SidePanel from './components/SidePanel.vue'
 import ChatWindow from './components/ChatWindow.vue'
 import InputArea from './components/InputArea.vue'
@@ -20,7 +20,14 @@ const isSettingsModalOpen = ref(false)
 const isDataModalOpen = ref(false)
 const isDebugPanelEnabled = DEBUG_PANEL_ENABLED
 
+const handleBeforeUnload = () => {
+  if (chatStore.isGenerating) {
+    void chatStore.cancelGeneration()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
   connectSocket()
   try {
     await chatStore.initializeApp()
@@ -45,6 +52,10 @@ onMounted(async () => {
       'Failed to initialize the application. Please refresh the page.'
     )
   }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 
 const openSettingsModal = () => (isSettingsModalOpen.value = true)

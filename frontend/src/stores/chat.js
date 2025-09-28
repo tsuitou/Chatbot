@@ -463,9 +463,9 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    prepareNewChat() {
+    async prepareNewChat() {
       if (this.isGenerating) {
-        void this.cancelGeneration()
+        await this.cancelGeneration()
       }
       this.cancelEditing()
       this.chatState.active = null
@@ -574,6 +574,24 @@ export const useChatStore = defineStore('chat', {
           streaming: requestConfig.streaming,
           requestId,
         })
+
+        const activeChatId = this.chatState.active?.meta?.id
+        const currentStream = this.generationState.stream
+        const trackedMessage = this._findMessageById(modelMessage.id)
+        const isSameRequest =
+          currentStream?.requestId === requestId &&
+          currentStream?.messageId === modelMessage.id
+
+        if (
+          activeChatId !== chatId ||
+          this.generationState.status !== GenerationStatus.STREAMING ||
+          !isSameRequest ||
+          !trackedMessage ||
+          trackedMessage.status !== 'streaming' ||
+          trackedMessage.requestId !== requestId
+        ) {
+          return
+        }
 
         recordDebugRequest(payload)
         startGeneration(payload)
@@ -1002,14 +1020,22 @@ export const useChatStore = defineStore('chat', {
           ? sortedMessages.slice(targetIndex)
           : sortedMessages.slice(targetIndex + 1)
 
+      let responseMessage = null
       try {
+        const failedPrunes = []
         for (const candidate of pruneCandidates) {
           try {
             await db.deleteMessage(chatId, candidate.id)
+            this._removeMessage(candidate.id)
           } catch (error) {
             console.error('Failed to prune message:', candidate.id, error)
+            failedPrunes.push(candidate.id)
           }
-          this._removeMessage(candidate.id)
+        }
+
+        if (failedPrunes.length) {
+          showErrorToast('Failed to prune existing messages. Please try again.')
+          return
         }
 
         sortMessagesBySequence(this.activeMessages)
@@ -1064,7 +1090,7 @@ export const useChatStore = defineStore('chat', {
           target.sender === 'model' && targetSequence != null
             ? targetSequence
             : nextSequence(this.activeMessages)
-        const responseMessage = createModelMessage({
+        responseMessage = createModelMessage({
           sequence: responseSequence,
           requestId,
           configSnapshot: requestConfig,
@@ -1075,6 +1101,7 @@ export const useChatStore = defineStore('chat', {
 
         await db.saveMessage(chatId, responseMessage)
         this._appendMessage(responseMessage)
+        this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
           messageId: responseMessage.id,
@@ -1091,12 +1118,44 @@ export const useChatStore = defineStore('chat', {
           requestId,
         })
 
+        const activeChatId = this.chatState.active?.meta?.id
+        const currentStream = this.generationState.stream
+        const trackedMessage = this._findMessageById(responseMessage.id)
+        const isSameRequest =
+          currentStream?.requestId === requestId &&
+          currentStream?.messageId === responseMessage.id
+
+        if (
+          activeChatId !== chatId ||
+          this.generationState.status !== GenerationStatus.STREAMING ||
+          !isSameRequest ||
+          !trackedMessage ||
+          trackedMessage.status !== 'streaming' ||
+          trackedMessage.requestId !== requestId
+        ) {
+          return
+        }
+
         this._touchActiveChat()
         recordDebugRequest(payload)
         startGeneration(payload)
       } catch (error) {
         console.error('Failed to resend message:', error)
-        showErrorToast('Failed to resend message. Please try again.')
+        const message =
+          error?.message || error?.error || 'Failed to resend message. Please try again.'
+        showErrorToast(message)
+        if (responseMessage?.id) {
+          this._removeMessage(responseMessage.id)
+          try {
+            await db.deleteMessage(chatId, responseMessage.id)
+          } catch (cleanupError) {
+            console.warn(
+              'Cleanup failed for resend response message',
+              responseMessage.id,
+              cleanupError
+            )
+          }
+        }
         this._setGenerationState(GenerationStatus.ERROR, null, error)
       }
     },
