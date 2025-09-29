@@ -206,22 +206,26 @@ function warnStructuredCloneOnce(detail) {
 }
 
 const deepClone = (input) => {
-  if (typeof structuredClone === 'function') {
+  if (typeof structuredClone !== 'function') {
+    return manualDeepClone(input)
+  }
+
+  if (shouldRewriteForStructuredClone(input)) {
+    const plainInput = toPlainObject(input)
     try {
-      return structuredClone(input)
+      return structuredClone(plainInput)
     } catch (error) {
       warnStructuredCloneOnce(error)
-      if (shouldRewriteForStructuredClone(input)) {
-        const plainInput = toPlainObject(input)
-        try {
-          return structuredClone(plainInput)
-        } catch (retryError) {
-          warnStructuredCloneOnce(retryError)
-        }
-      }
+      return manualDeepClone(plainInput)
     }
   }
-  return manualDeepClone(input)
+
+  try {
+    return structuredClone(input)
+  } catch (error) {
+    warnStructuredCloneOnce(error)
+    return manualDeepClone(input)
+  }
 }
 
 function buildChatAttachmentRange(chatId) {
