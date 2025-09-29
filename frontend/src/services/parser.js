@@ -18,8 +18,11 @@ const segmentProcessor = unified()
 
 export async function parseModelResponse(rawText) {
   if (!rawText) return []
-  const { text: latexNormalizedText, block: blockPlaceholders, inline } =
-    normalizeLatexBrackets(rawText)
+  const {
+    text: latexNormalizedText,
+    block: blockPlaceholders,
+    inline,
+  } = normalizeLatexBrackets(rawText)
   const normalizedText = splitTrailingFence(latexNormalizedText)
   const segments = []
   const tree = unified()
@@ -98,7 +101,9 @@ function injectPlaceholderMath(tree, blockPlaceholders, inlinePlaceholders) {
   if (!blockPlaceholders.length && !inlinePlaceholders.length) return
 
   if (blockPlaceholders.length) {
-    const blockMap = new Map(blockPlaceholders.map(({ token, value }) => [token, value]))
+    const blockMap = new Map(
+      blockPlaceholders.map(({ token, value }) => [token, value])
+    )
     const nextChildren = []
     for (const child of tree.children) {
       if (
@@ -120,7 +125,9 @@ function injectPlaceholderMath(tree, blockPlaceholders, inlinePlaceholders) {
 
   if (!inlinePlaceholders.length) return
 
-  const inlineMap = new Map(inlinePlaceholders.map(({ token, value }) => [token, value]))
+  const inlineMap = new Map(
+    inlinePlaceholders.map(({ token, value }) => [token, value])
+  )
   const inlinePattern = new RegExp(
     inlinePlaceholders.map(({ token }) => escapeRegex(token)).join('|'),
     'g'
@@ -170,7 +177,9 @@ function splitByTokens(value, pattern) {
     segments.push({ type: 'text', value: value.slice(lastIndex) })
   }
 
-  return segments.filter((segment) => segment.type !== 'text' || segment.value.length)
+  return segments.filter(
+    (segment) => segment.type !== 'text' || segment.value.length
+  )
 }
 
 function createDisplayMathNode(value) {

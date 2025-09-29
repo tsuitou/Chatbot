@@ -7,6 +7,15 @@ import { getDefaultProviderId, getProviderById } from './providers'
 const MAX_FILE_SIZE_DEFAULT = 10 * 1024 * 1024 // 10MB
 const MAX_ATTACHMENTS = 10
 
+function cloneBlobValue(value) {
+  if (!value) return null
+  if (typeof Blob !== 'undefined' && value instanceof Blob) {
+    const type = value.type || 'application/octet-stream'
+    return value.slice(0, value.size, type)
+  }
+  return value
+}
+
 function formatFileSize(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
@@ -217,13 +226,14 @@ function buildAttachmentRecord(file) {
 }
 
 function cloneAttachment(attachment) {
+  const sanitizedBlob = cloneBlobValue(attachment?.blob || attachment?.file)
   return {
     id: attachment.id ?? uuidv4(),
     name: attachment.name ?? 'attachment',
     mimeType: attachment.mimeType ?? 'application/octet-stream',
     size: attachment.size ?? 0,
     source: attachment.source ?? 'user',
-    blob: attachment.blob ?? null,
+    blob: sanitizedBlob,
     remoteUri: attachment.remoteUri ?? null,
     uploadProgress: attachment.uploadProgress ?? 100,
     error: attachment.error ?? null,

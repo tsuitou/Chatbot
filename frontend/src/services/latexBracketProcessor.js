@@ -1,6 +1,7 @@
 import balanced from 'balanced-match'
 
-const containsLatexRegex = /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\}.*?\\end\{equation\}/s
+const containsLatexRegex =
+  /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\}.*?\\end\{equation\}/s
 const PROTECTED_PREFIX = '__LATEX_PROTECTED__'
 const BLOCK_TOKEN_PREFIX = '@@KATEX_BLOCK_'
 const INLINE_TOKEN_PREFIX = '@@KATEX_INLINE_'
@@ -32,12 +33,18 @@ export function normalizeLatexBrackets(text) {
   })
 
   const restoredText = restoreSegments(workingText, protectedItems)
-  return { text: restoredText, block: blockPlaceholders, inline: inlinePlaceholders }
+  return {
+    text: restoredText,
+    block: blockPlaceholders,
+    inline: inlinePlaceholders,
+  }
 }
 
 function protectSegments(text, bucket) {
   return text
-    .replace(/((`{3,}|~{3,})[\s\S]*?\2|`[^`]*`)/g, (match) => storeProtected(match, bucket))
+    .replace(/((`{3,}|~{3,})[\s\S]*?\2|`[^`]*`)/g, (match) =>
+      storeProtected(match, bucket)
+    )
     .replace(/\[([^\[\]]*(?:\[[^\]]*\][^\[\]]*)*)\]\([^)]*?\)/g, (match) =>
       storeProtected(match, bucket)
     )
@@ -50,13 +57,16 @@ function storeProtected(match, bucket) {
 }
 
 function restoreSegments(text, bucket) {
-  return text.replace(new RegExp(`${PROTECTED_PREFIX}(\\d+)__`, 'g'), (match, indexStr) => {
-    const index = Number.parseInt(indexStr, 10)
-    if (Number.isNaN(index) || index < 0 || index >= bucket.length) {
-      return match
+  return text.replace(
+    new RegExp(`${PROTECTED_PREFIX}(\\d+)__`, 'g'),
+    (match, indexStr) => {
+      const index = Number.parseInt(indexStr, 10)
+      if (Number.isNaN(index) || index < 0 || index >= bucket.length) {
+        return match
+      }
+      return bucket[index]
     }
-    return bucket[index]
-  })
+  )
 }
 
 function convertDelimited(source, open, close, replacer) {

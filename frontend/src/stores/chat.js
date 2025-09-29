@@ -413,24 +413,15 @@ export const useChatStore = defineStore('chat', {
       )
     },
 
-    async _persistActiveMessage(message, options = {}) {
+    async _persistActiveMessage(message) {
       if (!this.chatState.active || !message) return false
-      const reloadFromDb = options.reloadFromDb === true
       const isStreaming = message.status === 'streaming'
       setContentStreamingState(message, isStreaming)
       syncContentRuntimeFromMessage(message)
       message.updatedAt = Date.now()
       try {
         await db.updateMessage(this.chatState.active.meta.id, toRaw(message))
-        if (reloadFromDb) {
-          const stored = await db.getMessageWithAttachments(
-            this.chatState.active.meta.id,
-            message.id
-          )
-          this._replaceMessage(stored ?? message)
-        } else {
-          this._replaceMessage(message)
-        }
+        this._replaceMessage(message)
         return true
       } catch (error) {
         console.error('Failed to persist message state:', error)
@@ -539,11 +530,7 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(userMessage)
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
-        const storedUser = await db.getMessageWithAttachments(
-          chatId,
-          userMessage.id
-        )
-        this._appendMessage(storedUser ?? userMessage)
+        this._appendMessage(userMessage)
 
         const modelSequence = nextSequence(this.activeMessages)
         const requestId = uuidv4()
@@ -556,11 +543,7 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(modelMessage)
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
-        const storedModel = await db.getMessageWithAttachments(
-          chatId,
-          modelMessage.id
-        )
-        this._appendMessage(storedModel ?? modelMessage)
+        this._appendMessage(modelMessage)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
@@ -1119,11 +1102,7 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(responseMessage)
 
         await db.saveMessage(chatId, responseMessage)
-        const storedResponse = await db.getMessageWithAttachments(
-          chatId,
-          responseMessage.id
-        )
-        this._appendMessage(storedResponse ?? responseMessage)
+        this._appendMessage(responseMessage)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
@@ -1165,7 +1144,9 @@ export const useChatStore = defineStore('chat', {
       } catch (error) {
         console.error('Failed to resend message:', error)
         const message =
-          error?.message || error?.error || 'Failed to resend message. Please try again.'
+          error?.message ||
+          error?.error ||
+          'Failed to resend message. Please try again.'
         showErrorToast(message)
         if (responseMessage?.id) {
           this._removeMessage(responseMessage.id)
