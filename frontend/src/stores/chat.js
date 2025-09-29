@@ -413,15 +413,24 @@ export const useChatStore = defineStore('chat', {
       )
     },
 
-    async _persistActiveMessage(message) {
+    async _persistActiveMessage(message, options = {}) {
       if (!this.chatState.active || !message) return false
+      const reloadFromDb = options.reloadFromDb === true
       const isStreaming = message.status === 'streaming'
       setContentStreamingState(message, isStreaming)
       syncContentRuntimeFromMessage(message)
       message.updatedAt = Date.now()
       try {
         await db.updateMessage(this.chatState.active.meta.id, toRaw(message))
-        this._replaceMessage(message)
+        if (reloadFromDb) {
+          const stored = await db.getMessageWithAttachments(
+            this.chatState.active.meta.id,
+            message.id
+          )
+          this._replaceMessage(stored ?? message)
+        } else {
+          this._replaceMessage(message)
+        }
         return true
       } catch (error) {
         console.error('Failed to persist message state:', error)
@@ -855,7 +864,9 @@ export const useChatStore = defineStore('chat', {
         updatedAt: Date.now(),
       }
 
-      const persisted = await this._persistActiveMessage(updated)
+      const persisted = await this._persistActiveMessage(updated, {
+        reloadFromDb: true,
+      })
       if (persisted) {
         this._touchActiveChat()
       } else {
