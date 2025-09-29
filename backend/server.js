@@ -88,7 +88,11 @@ app.use(cors({
 }))
 
 const httpServer = createServer(app)
-const io = new Server(httpServer, { cors: { origin: allowed.length ? allowed : '*' }, maxHttpBufferSize: 20 * 1024 * 1024 })
+const io = new Server(httpServer, {
+  cors: { origin: allowed.length ? allowed : '*' },
+  maxHttpBufferSize: 20 * 1024 * 1024,
+  path: '/chatbot/socket.io',
+})
 
 function resolveApiKey() {
   const envKey = (process.env.GEMINI_API_KEY || '').trim()

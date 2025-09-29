@@ -16,6 +16,7 @@ const resolveSocketUrl = () => {
 
 const socket = io(resolveSocketUrl(), {
   autoConnect: false,
+  path: '/chatbot/socket.io',
 })
 
 let store
