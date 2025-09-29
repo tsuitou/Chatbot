@@ -530,7 +530,11 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(userMessage)
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
-        this._appendMessage(userMessage)
+        const storedUser = await db.getMessageWithAttachments(
+          chatId,
+          userMessage.id
+        )
+        this._appendMessage(storedUser ?? userMessage)
 
         const modelSequence = nextSequence(this.activeMessages)
         const requestId = uuidv4()
@@ -543,7 +547,11 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(modelMessage)
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
-        this._appendMessage(modelMessage)
+        const storedModel = await db.getMessageWithAttachments(
+          chatId,
+          modelMessage.id
+        )
+        this._appendMessage(storedModel ?? modelMessage)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
@@ -1100,7 +1108,11 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(responseMessage)
 
         await db.saveMessage(chatId, responseMessage)
-        this._appendMessage(responseMessage)
+        const storedResponse = await db.getMessageWithAttachments(
+          chatId,
+          responseMessage.id
+        )
+        this._appendMessage(storedResponse ?? responseMessage)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
