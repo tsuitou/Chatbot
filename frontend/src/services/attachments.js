@@ -7,24 +7,14 @@ import { getDefaultProviderId, getProviderById } from './providers'
 const MAX_FILE_SIZE_DEFAULT = 10 * 1024 * 1024 // 10MB
 const MAX_ATTACHMENTS = 10
 
-function cloneBlobValue(value, { mimeType, name } = {}) {
+function cloneBlobValue(value, { mimeType } = {}) {
   if (!value) return null
 
   const fallbackType =
     mimeType || (typeof value.type === 'string' && value.type)
   const resolvedType = fallbackType || 'application/octet-stream'
 
-  if (typeof File !== 'undefined' && value instanceof File) {
-    return new File([value], value.name, {
-      type: value.type || resolvedType,
-      lastModified: value.lastModified ?? Date.now(),
-    })
-  }
-
   if (typeof Blob !== 'undefined' && value instanceof Blob) {
-    if (typeof File !== 'undefined' && name) {
-      return new File([value], name, { type: resolvedType })
-    }
     return value.slice(0, value.size, resolvedType)
   }
 
@@ -243,7 +233,6 @@ function buildAttachmentRecord(file) {
 function cloneAttachment(attachment) {
   const sanitizedBlob = cloneBlobValue(attachment?.blob || attachment?.file, {
     mimeType: attachment?.mimeType,
-    name: attachment?.name,
   })
   return {
     id: attachment.id ?? uuidv4(),
@@ -252,6 +241,7 @@ function cloneAttachment(attachment) {
     size: attachment.size ?? 0,
     source: attachment.source ?? 'user',
     blob: sanitizedBlob,
+    file: null,
     remoteUri: attachment.remoteUri ?? null,
     uploadProgress: attachment.uploadProgress ?? 100,
     error: attachment.error ?? null,
