@@ -165,6 +165,37 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
   return false
 }
 
+function toPlainObject(obj, seen = new WeakSet()) {
+  if (obj === null || typeof obj !== 'object') {
+    return obj
+  }
+
+  if (seen.has(obj)) {
+    return obj
+  }
+  seen.add(obj)
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => toPlainObject(item, seen))
+  }
+
+  const plain = {}
+  for (const [key, value] of Object.entries(obj)) {
+    plain[key] = toPlainObject(value, seen)
+  }
+  return plain
+}
+
+function warnStructuredCloneOnce(detail) {
+  if (structuredCloneWarningShown) return
+  structuredCloneWarningShown = true
+  if (detail) {
+    console.warn('structuredClone fallback engaged:', detail)
+  } else {
+    console.warn('structuredClone fallback engaged.')
+  }
+}
+
 const deepClone = (input) => {
   if (shouldBypassStructuredClone(input)) {
     return manualDeepClone(input)
@@ -173,10 +204,13 @@ const deepClone = (input) => {
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(input)
-    } catch {
-      if (!structuredCloneWarningShown) {
-        structuredCloneWarningShown = true
-        console.warn('structuredClone failed, falling back to manual clone.')
+    } catch (error) {
+      warnStructuredCloneOnce(error)
+      const plainInput = toPlainObject(input)
+      try {
+        return structuredClone(plainInput)
+      } catch (retryError) {
+        warnStructuredCloneOnce(retryError)
       }
     }
   }
