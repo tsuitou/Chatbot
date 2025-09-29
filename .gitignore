@@ -1,6 +1,7 @@
 # Specific files to ignore
 /CLAUDE.md
 /AGENTS.md
+/compact_context.txt
 
 # Dependencies
 /node_modules

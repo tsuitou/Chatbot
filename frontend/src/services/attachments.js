@@ -399,4 +399,4 @@ export function createAttachmentBucket(options = {}) {
   }
 }
 
-export { MAX_ATTACHMENTS }
+export { MAX_ATTACHMENTS, cloneAttachment }

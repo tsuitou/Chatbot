@@ -11,7 +11,10 @@ import {
   cloneSettings as cloneModelSettings,
 } from '../services/modelConfig'
 import { getDefaultProviderId } from '../services/providers'
-import { createAttachmentBucket } from '../services/attachments'
+import {
+  createAttachmentBucket,
+  cloneAttachment,
+} from '../services/attachments'
 import { useChatConfigStore } from './chatConfig'
 import { applyResponseTransforms } from '../services/responseTransforms'
 import { useDebugStore } from './debug'
@@ -133,7 +136,7 @@ function normalizeMessageForState(message) {
     attachments: normalizeAttachments(
       message.attachments ?? [],
       message.sender
-    ),
+    ).map(cloneAttachment),
     configSnapshot: cloneConfigSnapshot(message.configSnapshot),
     metadata: { ...(message.metadata ?? {}) },
     uiFlags: { ...(message.uiFlags ?? {}) },

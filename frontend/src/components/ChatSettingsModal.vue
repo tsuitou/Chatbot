@@ -264,7 +264,10 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { useChatConfigStore } from '../stores/chatConfig'
 import { useChatStore } from '../stores/chat'
-import { createAttachmentBucket } from '../services/attachments'
+import {
+  createAttachmentBucket,
+  cloneAttachment,
+} from '../services/attachments'
 import { parseTransformScript } from '../services/responseTransforms'
 import { showSuccessToast, showErrorToast } from '../services/notification'
 
@@ -373,11 +376,7 @@ function createAutoMessageEntry(initial = {}) {
     maxFileSize: AUTO_ATTACHMENT_MAX_FILE_SIZE,
   })
   const attachments = Array.isArray(initial.attachments)
-    ? initial.attachments.map((att, index) => ({
-        ...att,
-        order: att.order ?? index,
-        blob: att.blob || att.file || null,
-      }))
+    ? initial.attachments.map(cloneAttachment)
     : []
   bucket.replaceAll(attachments)
   return reactive({
@@ -451,11 +450,7 @@ function collectAutoMessages(location) {
       ? entry.role.toLowerCase()
       : 'user',
     text: entry.text || '',
-    attachments: entry.bucket.list().map((att, idx) => ({
-      ...att,
-      order: att.order ?? idx,
-      blob: att.blob || att.file || null,
-    })),
+    attachments: entry.bucket.list().map(cloneAttachment),
     position: index,
     location,
   }))
