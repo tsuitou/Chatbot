@@ -119,17 +119,34 @@ function manualDeepClone(value) {
 
 let structuredCloneWarningShown = false
 
-function shouldBypassStructuredClone(value, seen = new WeakSet()) {
+const VUE_PROXY_FLAGS = ['__v_isRef', '__v_isReactive', '__v_isReadonly']
+
+function isVueProxy(candidate) {
+  return VUE_PROXY_FLAGS.some((flag) => candidate && candidate[flag])
+}
+
+function isStructuredCloneSafePrototype(value) {
+  if (!value) return true
+
+  if (value instanceof Map || value instanceof Set) return true
+  if (value instanceof Date || value instanceof RegExp) return true
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true
+
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return true
+  if (typeof File !== 'undefined' && value instanceof File) return true
+
+  if (typeof FileList !== 'undefined' && value instanceof FileList) return true
+
+  return false
+}
+
+function shouldRewriteForStructuredClone(value, seen = new WeakSet()) {
   if (value === null || typeof value !== 'object') {
     return false
   }
 
-  if (
-    (typeof Blob !== 'undefined' && value instanceof Blob) ||
-    (typeof File !== 'undefined' && value instanceof File)
-  ) {
-    return true
-  }
+  if (isVueProxy(value)) return true
+  if (typeof value === 'function') return true
 
   if (seen.has(value)) {
     return false
@@ -137,28 +154,20 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
   seen.add(value)
 
   if (Array.isArray(value)) {
-    return value.some((item) => shouldBypassStructuredClone(item, seen))
+    return value.some((item) => shouldRewriteForStructuredClone(item, seen))
   }
 
   const prototype = Object.getPrototypeOf(value)
   const isPlainObject = prototype === Object.prototype || prototype === null
   if (!isPlainObject) {
-    return true
-  }
-
-  // Check for Vue reactive objects (Proxy)
-  if (
-    value.toString().includes('[object Object]') &&
-    Object.getOwnPropertyNames(value).length > 0 &&
-    typeof value.__v_isRef === 'undefined' &&
-    Object.getOwnPropertyDescriptor(value, Object.getOwnPropertyNames(value)[0])
-      ?.get
-  ) {
+    if (isStructuredCloneSafePrototype(value)) {
+      return false
+    }
     return true
   }
 
   for (const [, nested] of Object.entries(value)) {
-    if (shouldBypassStructuredClone(nested, seen)) {
+    if (shouldRewriteForStructuredClone(nested, seen)) {
       return true
     }
   }
@@ -197,20 +206,18 @@ function warnStructuredCloneOnce(detail) {
 }
 
 const deepClone = (input) => {
-  if (shouldBypassStructuredClone(input)) {
-    return manualDeepClone(input)
-  }
-
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(input)
     } catch (error) {
       warnStructuredCloneOnce(error)
-      const plainInput = toPlainObject(input)
-      try {
-        return structuredClone(plainInput)
-      } catch (retryError) {
-        warnStructuredCloneOnce(retryError)
+      if (shouldRewriteForStructuredClone(input)) {
+        const plainInput = toPlainObject(input)
+        try {
+          return structuredClone(plainInput)
+        } catch (retryError) {
+          warnStructuredCloneOnce(retryError)
+        }
       }
     }
   }
