@@ -165,27 +165,6 @@ function shouldBypassStructuredClone(value, seen = new WeakSet()) {
   return false
 }
 
-function toPlainObject(obj, seen = new WeakSet()) {
-  if (obj === null || typeof obj !== 'object') {
-    return obj
-  }
-
-  if (seen.has(obj)) {
-    return obj // Avoid infinite recursion
-  }
-  seen.add(obj)
-
-  if (Array.isArray(obj)) {
-    return obj.map((item) => toPlainObject(item, seen))
-  }
-
-  const plain = {}
-  for (const [key, value] of Object.entries(obj)) {
-    plain[key] = toPlainObject(value, seen)
-  }
-  return plain
-}
-
 const deepClone = (input) => {
   if (shouldBypassStructuredClone(input)) {
     return manualDeepClone(input)
@@ -194,23 +173,10 @@ const deepClone = (input) => {
   if (typeof structuredClone === 'function') {
     try {
       return structuredClone(input)
-    } catch (error) {
-      console.warn('structuredClone failed, retrying with plain object:', error)
-      // Convert reactive objects to plain objects and retry
-      const plainInput = toPlainObject(input)
-      try {
-        return structuredClone(plainInput)
-      } catch (retryError) {
-        console.warn(
-          'structuredClone retry failed, falling back to manual clone:',
-          retryError
-        )
-        if (!structuredCloneWarningShown) {
-          structuredCloneWarningShown = true
-          console.warn(
-            'structuredClone failed twice, falling back to manual cloning.'
-          )
-        }
+    } catch {
+      if (!structuredCloneWarningShown) {
+        structuredCloneWarningShown = true
+        console.warn('structuredClone failed, falling back to manual clone.')
       }
     }
   }
