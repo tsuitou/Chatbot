@@ -212,19 +212,28 @@ async function convertFile(file) {
   }
 }
 
-function buildAttachmentRecord(file) {
+async function buildAttachmentRecord(file) {
   const requiresRemoteUpload =
     isMediaFile(file) && file.size > MAX_FILE_SIZE_DEFAULT
 
-  const clonedBlob = cloneBlobValue(file, { mimeType: file.type })
+  // Read the file content into memory to break dependency on the original file
+  let independentBlob
+  try {
+    const arrayBuffer = await file.arrayBuffer()
+    independentBlob = new Blob([arrayBuffer], { type: file.type })
+  } catch (error) {
+    // Fallback to cloning
+    independentBlob = cloneBlobValue(file, { mimeType: file.type })
+  }
 
   return {
     id: uuidv4(),
     name: file.name,
     mimeType: file.type,
-    size: clonedBlob?.size ?? file.size,
+    size: independentBlob?.size ?? file.size,
     source: 'user',
-    blob: clonedBlob,
+    blob: independentBlob,
+    file: null, // Clear original file reference
     remoteUri: null,
     uploadProgress: requiresRemoteUpload ? 0 : 100,
     error: null,
@@ -303,7 +312,7 @@ export function createAttachmentBucket(options = {}) {
           )
           continue
         }
-        const record = buildAttachmentRecord(processed)
+        const record = await buildAttachmentRecord(processed)
         if (!allowRemoteUpload && record.uploadProgress < 100) {
           const limit = maxFileSize || MAX_FILE_SIZE_DEFAULT
           showErrorToast(
@@ -358,7 +367,7 @@ export function createAttachmentBucket(options = {}) {
 
   function list() {
     return attachments.map((item, index) => ({
-      ...item,
+      ...cloneAttachment(item),
       order: item.order ?? index,
     }))
   }
