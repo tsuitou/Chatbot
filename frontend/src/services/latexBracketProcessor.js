@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape */
 import balanced from 'balanced-match'
 
 const containsLatexRegex =
@@ -15,6 +16,7 @@ export function normalizeLatexBrackets(text) {
   let workingText = protectSegments(text, protectedItems)
 
   const blockPlaceholders = []
+
   workingText = convertDelimited(workingText, '\\[', '\\]', (body) => {
     const trimmed = body.trim()
     if (!trimmed) return null
@@ -24,6 +26,7 @@ export function normalizeLatexBrackets(text) {
   })
 
   const inlinePlaceholders = []
+
   workingText = convertDelimited(workingText, '\\(', '\\)', (body) => {
     const trimmed = body.trim()
     if (!trimmed) return null

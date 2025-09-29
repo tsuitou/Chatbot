@@ -195,11 +195,16 @@ const deepClone = (input) => {
     try {
       return structuredClone(input)
     } catch (error) {
+      console.warn('structuredClone failed, retrying with plain object:', error)
       // Convert reactive objects to plain objects and retry
       const plainInput = toPlainObject(input)
       try {
         return structuredClone(plainInput)
       } catch (retryError) {
+        console.warn(
+          'structuredClone retry failed, falling back to manual clone:',
+          retryError
+        )
         if (!structuredCloneWarningShown) {
           structuredCloneWarningShown = true
           console.warn(

@@ -107,7 +107,6 @@ const adjustTextHeight = () => {
   const textarea = textInput.value
   if (!textarea) return
 
-  const beforeHeight = textarea.style.height
   textarea.style.height = 'auto'
 
   const style = window.getComputedStyle(textarea)
