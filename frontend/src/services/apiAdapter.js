@@ -2,12 +2,23 @@ import { getDefaultProviderId, getProviderById } from './providers'
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
+    if (!blob) {
+      reject(new Error('No blob provided for base64 conversion.'))
+      return
+    }
     const reader = new FileReader()
     reader.onloadend = () => {
-      const base64String = reader.result.split(',')[1]
+      const result = reader.result
+      if (typeof result !== 'string') {
+        reject(new Error('Failed to read blob as data URL.'))
+        return
+      }
+      const [, base64String = ''] = result.split(',')
       resolve(base64String)
     }
-    reader.onerror = reject
+    reader.onerror = () => {
+      reject(reader.error || new Error('Failed to read blob as data URL.'))
+    }
     reader.readAsDataURL(blob)
   })
 }
