@@ -47,7 +47,7 @@ async function buildMessageParts(message) {
         })
       } else {
         throw new Error(
-          `Attachment ${att?.id || '(unknown)'} has no data available.`
+          `Attachment "${att?.name || att?.id || '(unknown)'}" is missing both blob data and remote URI. This may indicate a data consistency issue or incomplete upload.`
         )
       }
     }

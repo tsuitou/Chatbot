@@ -338,6 +338,7 @@ function buildAttachmentRecord(
   if (!source) {
     throw new Error('Attachment source must be specified')
   }
+  // Preserve store structure while adding only DB-specific metadata
   return {
     ...base,
     id: base.id ?? uuidv4(),

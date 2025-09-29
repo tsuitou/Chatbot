@@ -430,7 +430,7 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    async _persistActiveMessage(message) {
+    async _persistActiveMessage(message, options = {}) {
       if (!this.chatState.active || !message) return false
       const isStreaming = message.status === 'streaming'
       setContentStreamingState(message, isStreaming)
@@ -438,6 +438,19 @@ export const useChatStore = defineStore('chat', {
       message.updatedAt = Date.now()
       try {
         await db.updateMessage(this.chatState.active.meta.id, toRaw(message))
+
+        // For edited messages, reload attachments from DB to ensure Blob consistency
+        if (options.reloadAttachments) {
+          const hydratedMessage = await this._loadMessageFromDb(
+            this.chatState.active.meta.id,
+            message.id
+          )
+          if (hydratedMessage) {
+            this._replaceMessage(hydratedMessage)
+            return true
+          }
+        }
+
         this._replaceMessage(message)
         return true
       } catch (error) {
@@ -547,9 +560,7 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(userMessage)
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
-        const persistedUser =
-          (await this._loadMessageFromDb(chatId, userMessage.id)) || userMessage
-        this._appendMessage(persistedUser)
+        this._appendMessage(userMessage)
 
         const modelSequence = nextSequence(this.activeMessages)
         const requestId = uuidv4()
@@ -562,10 +573,7 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(modelMessage)
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
-        const persistedModel =
-          (await this._loadMessageFromDb(chatId, modelMessage.id)) ||
-          modelMessage
-        this._appendMessage(persistedModel)
+        this._appendMessage(modelMessage)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
@@ -870,7 +878,7 @@ export const useChatStore = defineStore('chat', {
       }
 
       const persisted = await this._persistActiveMessage(updated, {
-        reloadFromDb: true,
+        reloadAttachments: true,
       })
       if (persisted) {
         this._touchActiveChat()
@@ -1006,11 +1014,6 @@ export const useChatStore = defineStore('chat', {
       }
 
       const chatId = this.chatState.active.meta.id
-      const hydratedTarget = await this._loadMessageFromDb(chatId, target.id)
-      if (hydratedTarget) {
-        target = hydratedTarget
-        this._replaceMessage(target)
-      }
 
       const chatConfigStore = useChatConfigStore()
       const sortedMessages = [...this.activeMessages].sort(
