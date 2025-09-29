@@ -413,6 +413,23 @@ export const useChatStore = defineStore('chat', {
       )
     },
 
+    async _loadMessageFromDb(chatId, messageId) {
+      try {
+        const raw = await db.getMessageWithAttachments(chatId, messageId)
+        if (!raw) return null
+        const [hydrated] = hydrateMessages([raw])
+        if (!hydrated) return null
+        return normalizeMessageForState(hydrated)
+      } catch (error) {
+        console.warn(
+          'Failed to load message with attachments from IndexedDB:',
+          messageId,
+          error
+        )
+        return null
+      }
+    },
+
     async _persistActiveMessage(message) {
       if (!this.chatState.active || !message) return false
       const isStreaming = message.status === 'streaming'
@@ -530,7 +547,9 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(userMessage)
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
-        this._appendMessage(userMessage)
+        const persistedUser =
+          (await this._loadMessageFromDb(chatId, userMessage.id)) || userMessage
+        this._appendMessage(persistedUser)
 
         const modelSequence = nextSequence(this.activeMessages)
         const requestId = uuidv4()
@@ -543,7 +562,10 @@ export const useChatStore = defineStore('chat', {
         syncContentRuntimeFromMessage(modelMessage)
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
-        this._appendMessage(modelMessage)
+        const persistedModel =
+          (await this._loadMessageFromDb(chatId, modelMessage.id)) ||
+          modelMessage
+        this._appendMessage(persistedModel)
         this.bumpScrollSignal()
 
         this._setGenerationState(GenerationStatus.STREAMING, {
@@ -976,7 +998,7 @@ export const useChatStore = defineStore('chat', {
 
     async resendMessage(messageId) {
       if (!this.chatState.active) return
-      const target = this._findMessageById(messageId)
+      let target = this._findMessageById(messageId)
       if (!target) return
 
       if (this.isGenerating) {
@@ -984,6 +1006,12 @@ export const useChatStore = defineStore('chat', {
       }
 
       const chatId = this.chatState.active.meta.id
+      const hydratedTarget = await this._loadMessageFromDb(chatId, target.id)
+      if (hydratedTarget) {
+        target = hydratedTarget
+        this._replaceMessage(target)
+      }
+
       const chatConfigStore = useChatConfigStore()
       const sortedMessages = [...this.activeMessages].sort(
         (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)

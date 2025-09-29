@@ -8,6 +8,10 @@ function blobToBase64(blob) {
     }
     const reader = new FileReader()
     reader.onloadend = () => {
+      if (reader.error) {
+        reject(reader.error)
+        return
+      }
       const result = reader.result
       if (typeof result !== 'string') {
         reject(new Error('Failed to read blob as data URL.'))
@@ -41,6 +45,10 @@ async function buildMessageParts(message) {
         parts.push({
           inlineData: { mimeType: att.mimeType, data: base64Data },
         })
+      } else {
+        throw new Error(
+          `Attachment ${att?.id || '(unknown)'} has no data available.`
+        )
       }
     }
   }

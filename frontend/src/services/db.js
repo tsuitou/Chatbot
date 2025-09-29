@@ -584,6 +584,30 @@ export async function getAutoMessages(chatId) {
   return autoMessages
 }
 
+export async function getMessageWithAttachments(chatId, messageId) {
+  const db = await dbPromise
+  const tx = db.transaction(STORE_NAME, 'readonly')
+  const store = tx.store
+
+  const record = await store.get(messageId)
+  if (!record || record.type !== TYPE_MESSAGE || record.chatId !== chatId) {
+    await tx.done
+    return null
+  }
+
+  const range = IDBKeyRange.bound([messageId, -Infinity], [messageId, Infinity])
+  const attachments = await store.index(IDX_ATTACHMENT_BY_MESSAGE).getAll(range)
+
+  await tx.done
+
+  return {
+    ...record,
+    attachments: attachments
+      .filter((att) => att?.type === TYPE_ATTACHMENT)
+      .sort((a, b) => (a?.order ?? 0) - (b?.order ?? 0)),
+  }
+}
+
 function buildAutoMessagePayload(payload) {
   const result = []
   const pushItem = (item, location, position) => {
