@@ -870,10 +870,7 @@ export const useChatStore = defineStore('chat', {
       const updated = {
         ...message,
         content: { text: this.editingState.draftText },
-        attachments: normalizeAttachments(
-          this.editingState.attachmentBucket.list(),
-          message.sender
-        ),
+        attachments: this.editingState.attachmentBucket.list(),
         updatedAt: Date.now(),
       }
 

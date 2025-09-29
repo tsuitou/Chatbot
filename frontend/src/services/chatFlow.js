@@ -127,7 +127,7 @@ function createUserMessage({ sequence, text, attachments, configSnapshot }) {
     requestId: null,
     createdAt: ts,
     updatedAt: ts,
-    attachments: normalizeAttachments(attachments, 'user'),
+    attachments: attachments || [],
     uiFlags: {},
     runtime: createInitialRuntime(),
   }
