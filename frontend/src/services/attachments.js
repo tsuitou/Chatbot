@@ -216,13 +216,15 @@ function buildAttachmentRecord(file) {
   const requiresRemoteUpload =
     isMediaFile(file) && file.size > MAX_FILE_SIZE_DEFAULT
 
+  const clonedBlob = cloneBlobValue(file, { mimeType: file.type })
+
   return {
     id: uuidv4(),
     name: file.name,
     mimeType: file.type,
-    size: file.size,
+    size: clonedBlob?.size ?? file.size,
     source: 'user',
-    blob: file,
+    blob: clonedBlob,
     remoteUri: null,
     uploadProgress: requiresRemoteUpload ? 0 : 100,
     error: null,
