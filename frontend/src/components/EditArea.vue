@@ -107,19 +107,27 @@ const adjustTextHeight = () => {
   const textarea = textInput.value
   if (!textarea) return
 
-  textarea.style.height = 'auto'
-
   const style = window.getComputedStyle(textarea)
   const borderTop = parseFloat(style.borderTopWidth) || 0
   const borderBottom = parseFloat(style.borderBottomWidth) || 0
+  const paddingTop = parseFloat(style.paddingTop) || 0
+  const paddingBottom = parseFloat(style.paddingBottom) || 0
   const lineHeight = parseFloat(style.lineHeight) || 21
-  const baseHeight =
-    textarea.scrollHeight + borderTop + borderBottom + lineHeight
+
+  // テキストの内容から行数を計算
+  const textValue = textarea.value || ''
+  const lines = textValue.split('\n')
+  const lineCount = Math.max(lines.length, 1)
+
+  // 基本の高さを計算（行数 × 行高さ + パディング + ボーダー）
+  const contentHeight = lineCount * lineHeight
+  const baseHeight = contentHeight + paddingTop + paddingBottom + borderTop + borderBottom
 
   textarea.style.height = `${baseHeight}px`
   textarea.style.overflowY = 'hidden'
   textarea.style.overflowX = 'auto'
 
+  // 横スクロールが必要な場合、スクロールバーの高さを追加
   const structuralGap = textarea.offsetHeight - textarea.clientHeight
   const scrollbarHeight = Math.max(0, structuralGap - borderTop - borderBottom)
   const needsHorizontalScroll = textarea.scrollWidth > textarea.clientWidth
