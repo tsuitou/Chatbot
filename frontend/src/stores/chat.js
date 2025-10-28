@@ -462,6 +462,31 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    updateMessageUiFlags(messageId, partial = {}) {
+      if (!this.chatState.active || !messageId) return
+      if (!partial || typeof partial !== 'object') return
+      const message = this._findMessageById(messageId)
+      if (!message) return
+      const current = { ...(message.uiFlags || {}) }
+      let changed = false
+      for (const [key, value] of Object.entries(partial)) {
+        if (value === undefined) {
+          if (Object.prototype.hasOwnProperty.call(current, key)) {
+            delete current[key]
+            changed = true
+          }
+          continue
+        }
+        if (current[key] !== value) {
+          current[key] = value
+          changed = true
+        }
+      }
+      if (!changed) return
+      message.uiFlags = current
+      void this._persistActiveMessage(message)
+    },
+
     async loadChat(chatId) {
       if (!chatId) return
       this.cancelEditing()

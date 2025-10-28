@@ -545,8 +545,6 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-
-
 .thought-stream-header {
   display: flex;
   align-items: center;

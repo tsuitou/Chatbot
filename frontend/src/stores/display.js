@@ -108,6 +108,13 @@ export const useDisplayStore = defineStore('display', {
       } else {
         this.ui.collapsedThoughts = nextState
       }
+      const chatStore = useChatStore()
+      chatStore.updateMessageUiFlags(
+        messageId,
+        nextValue
+          ? { thoughtsCollapsed: undefined }
+          : { thoughtsCollapsed: false }
+      )
       this.messageGroups = this.messageGroups.map((group) =>
         group.id === messageId
           ? {
@@ -130,6 +137,8 @@ export const useDisplayStore = defineStore('display', {
       if (!this._contentCache) this._contentCache = new Map()
       if (!this._thoughtCache) this._thoughtCache = new Map()
 
+      const chatStore = useChatStore()
+
       if (chatChanged) {
         this.ui.collapsedThoughts = {}
         this.ui.activeSystemBubbles = {}
@@ -143,43 +152,72 @@ export const useDisplayStore = defineStore('display', {
         this.messageGroups = []
         this.previewableFiles = []
         this.ui.activeSystemBubbles = {}
+        this.ui.collapsedThoughts = {}
         return
       }
 
       const previousGroups = chatChanged
         ? new Map()
         : new Map(this.messageGroups.map((group) => [group.id, group]))
-
-      const hasFreshUserMessage = messages.some(
-        (message) =>
-          message.sender === 'user' && !previousGroups.has(message.id)
-      )
+      const previousCollapsed = { ...this.ui.collapsedThoughts }
+      const previousActive = { ...this.ui.activeSystemBubbles }
 
       const validIds = new Set(messages.map((m) => m.id))
-      const nextActiveSystemBubbles = hasFreshUserMessage
-        ? {}
-        : { ...this.ui.activeSystemBubbles }
-
       const groups = []
       const previewable = []
+      const nextActiveSystemBubbles = {}
+      const nextCollapsedState = {}
 
       for (const message of messages) {
         const messageId = message.id
         const wasKnown = previousGroups.has(messageId)
         const isModelMessage = message.sender === 'model'
+        const uiFlags = message.uiFlags || {}
 
+        const hasPersistedCollapse = Object.prototype.hasOwnProperty.call(
+          uiFlags,
+          'thoughtsCollapsed'
+        )
+        let isCollapsed
+        if (hasPersistedCollapse) {
+          isCollapsed = uiFlags.thoughtsCollapsed !== false
+        } else if (previousCollapsed[messageId] !== undefined) {
+          isCollapsed = !!previousCollapsed[messageId]
+        } else {
+          isCollapsed = true
+        }
+        if (!isCollapsed) {
+          nextCollapsedState[messageId] = false
+        }
+
+        const hasPersistedActive = Object.prototype.hasOwnProperty.call(
+          uiFlags,
+          'systemBubbleActive'
+        )
+        let isActive = false
         if (isModelMessage) {
+          if (hasPersistedActive) {
+            isActive = !!uiFlags.systemBubbleActive
+          } else if (previousActive[messageId]) {
+            isActive = true
+          }
           const shouldActivate =
             !chatChanged && (!wasKnown || message.status === 'streaming')
-          if (shouldActivate) {
-            nextActiveSystemBubbles[messageId] = true
+          if (shouldActivate && !isActive) {
+            isActive = true
+            chatStore.updateMessageUiFlags(messageId, {
+              systemBubbleActive: true,
+            })
           }
         }
 
-        const group = await this._buildMessageGroup(message)
+        if (isActive) {
+          nextActiveSystemBubbles[messageId] = true
+        }
 
-        group.system.shouldRender =
-          isModelMessage && !!nextActiveSystemBubbles[messageId]
+        const group = await this._buildMessageGroup(message)
+        group.system.isCollapsed = isCollapsed
+        group.system.shouldRender = isModelMessage && isActive
 
         groups.push(group)
 
@@ -213,21 +251,8 @@ export const useDisplayStore = defineStore('display', {
         }
       }
 
-      const nextCollapsed = {}
-      for (const [key, value] of Object.entries(this.ui.collapsedThoughts)) {
-        if (validIds.has(key)) {
-          nextCollapsed[key] = value
-        }
-      }
-      this.ui.collapsedThoughts = nextCollapsed
-
-      const nextActiveSystem = {}
-      for (const [key, value] of Object.entries(nextActiveSystemBubbles)) {
-        if (value && validIds.has(key)) {
-          nextActiveSystem[key] = true
-        }
-      }
-      this.ui.activeSystemBubbles = nextActiveSystem
+      this.ui.collapsedThoughts = nextCollapsedState
+      this.ui.activeSystemBubbles = nextActiveSystemBubbles
     },
 
     async _buildMessageGroup(message) {

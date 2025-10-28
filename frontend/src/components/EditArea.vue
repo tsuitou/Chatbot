@@ -121,7 +121,8 @@ const adjustTextHeight = () => {
 
   // 基本の高さを計算（行数 × 行高さ + パディング + ボーダー）
   const contentHeight = lineCount * lineHeight
-  const baseHeight = contentHeight + paddingTop + paddingBottom + borderTop + borderBottom
+  const baseHeight =
+    contentHeight + paddingTop + paddingBottom + borderTop + borderBottom
 
   textarea.style.height = `${baseHeight}px`
   textarea.style.overflowY = 'hidden'

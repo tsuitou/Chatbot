@@ -2,6 +2,11 @@
 /CLAUDE.md
 /AGENTS.md
 /compact_context.txt
+/claude_api.md
+
+# Documents
+/api-tests
+/docs
 
 # Dependencies
 /node_modules

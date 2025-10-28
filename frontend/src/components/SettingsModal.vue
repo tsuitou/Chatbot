@@ -420,7 +420,6 @@ const reset = () => {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  background-color: var(--bg-light);
 }
 
 .field-legend {
@@ -470,7 +469,7 @@ const reset = () => {
   border-radius: var(--border-radius);
   font-size: 14px;
   color: var(--text-color);
-  background-color: var(--bg-color);
+  background-color: var(--bg-light);
   box-sizing: border-box;
 }
 

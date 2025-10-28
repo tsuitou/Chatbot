@@ -16,6 +16,8 @@ Message {
   createdAt: number,
   updatedAt: number,
   attachments?: Array<Attachment>, // hydrated on read only
+  runtime?: Record<string, any>,
+  uiFlags?: Record<string, any>,
 }
 
 Attachment {
@@ -274,23 +276,31 @@ function cloneAttachmentForChat(original, chatId, messageId) {
 }
 
 const dbPromise = openDB(DB_NAME, DB_VERSION, {
-  upgrade(db) {
-    if (db.objectStoreNames.contains(STORE_NAME)) {
-      db.deleteObjectStore(STORE_NAME)
+  upgrade(db, oldVersion, newVersion, transaction) {
+    void oldVersion
+    void newVersion
+    const store = db.objectStoreNames.contains(STORE_NAME)
+      ? transaction.objectStore(STORE_NAME)
+      : db.createObjectStore(STORE_NAME, { keyPath: 'id' })
+
+    const ensureIndex = (name, keyPath, options) => {
+      if (!store.indexNames.contains(name)) {
+        store.createIndex(name, keyPath, options)
+      }
     }
-    const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' })
-    store.createIndex(IDX_BY_TYPE, 'type', { unique: false })
-    store.createIndex(IDX_MESSAGE_BY_CHAT, 'chatId', { unique: false })
-    store.createIndex(IDX_MESSAGE_BY_CHAT_SEQUENCE, ['chatId', 'sequence'], {
+
+    ensureIndex(IDX_BY_TYPE, 'type', { unique: false })
+    ensureIndex(IDX_MESSAGE_BY_CHAT, 'chatId', { unique: false })
+    ensureIndex(IDX_MESSAGE_BY_CHAT_SEQUENCE, ['chatId', 'sequence'], {
       unique: false,
     })
-    store.createIndex(IDX_ATTACHMENT_BY_MESSAGE, ['messageId', 'order'], {
+    ensureIndex(IDX_ATTACHMENT_BY_MESSAGE, ['messageId', 'order'], {
       unique: false,
     })
-    store.createIndex(IDX_ATTACHMENT_BY_CHAT, ['chatId', 'messageId'], {
+    ensureIndex(IDX_ATTACHMENT_BY_CHAT, ['chatId', 'messageId'], {
       unique: false,
     })
-    store.createIndex(
+    ensureIndex(
       IDX_AUTO_MESSAGE_BY_CHAT_LOCATION,
       ['chatId', 'location', 'position'],
       { unique: false }
@@ -321,6 +331,8 @@ function normalizeMessage(chatId, input) {
       ? deepClone(input.configSnapshot)
       : null,
     requestId: input.requestId ?? null,
+    runtime: input.runtime ? deepClone(input.runtime) : null,
+    uiFlags: deepClone(input.uiFlags ?? {}),
     createdAt,
     updatedAt: input.updatedAt ?? createdAt,
   }
