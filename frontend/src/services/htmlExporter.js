@@ -12,6 +12,18 @@ const ICONS = {
     </svg>`,
 }
 
+const STATUS_ICON = `
+  <svg class="status-icon-svg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" />
+  </svg>
+`
+
+const CHEVRON_ICON = `
+  <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+    <path d="M3 6l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+`
+
 const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   timeZone: 'Asia/Tokyo',
   year: 'numeric',
@@ -86,14 +98,67 @@ function renderModelSegments(segments) {
     .join('')
 }
 
-function buildSystemMeta(message) {
-  const providerId = message?.configSnapshot?.providerId
-  const provider = getProviderById(providerId)
-  if (provider.buildMetadataHtmlForExport) {
-    return provider.buildMetadataHtmlForExport(message)
+function getDefaultSystemSummary(message) {
+  if (message.status === 'streaming') return 'Streaming response'
+  if (message.status === 'error') return 'Generation failed'
+  if (message.status === 'cancelled') return 'Generation cancelled'
+  return 'No additional parameters'
+}
+
+function renderSystemBubble({ message, indicators, thoughtHtml, hasThoughts }) {
+  const fallback = getDefaultSystemSummary(message)
+  const summaryItems =
+    indicators.length > 0
+      ? indicators
+          .map((indicator) => {
+            const text = escapeHtml(indicator.text || '')
+            return `<span class="summary-item">${text}</span>`
+          })
+          .join('')
+      : `<span class="summary-item summary-item--placeholder">${escapeHtml(fallback)}</span>`
+
+  const thoughtId = `thought-${message.id}`
+  const headerClass = hasThoughts
+    ? 'thought-stream-header thought-toggle-btn'
+    : 'thought-stream-header disabled'
+  const buttonAttributes = hasThoughts
+    ? `type="button" class="${headerClass}" data-target="${thoughtId}" aria-expanded="false" aria-controls="${thoughtId}"`
+    : `type="button" class="${headerClass}" disabled`
+  const chevron = hasThoughts
+    ? `<span class="thought-chevron" aria-hidden="true">${CHEVRON_ICON}</span>`
+    : ''
+  const thoughtContent = hasThoughts
+    ? `<div class="thought-stream-content" id="${thoughtId}" hidden style="display: none;">${thoughtHtml}</div>`
+    : ''
+
+  return `
+    <div class="system-bubble">
+      <div class="thought-stream${hasThoughts ? '' : ' no-thoughts'}">
+        <button ${buttonAttributes}>
+          <span class="status-icon">
+            ${STATUS_ICON}
+          </span>
+          <span class="system-summary">
+            ${summaryItems}
+          </span>
+          ${chevron}
+        </button>
+        ${thoughtContent}
+      </div>
+    </div>
+  `
+}
+
+function buildSystemMeta(message, provider) {
+  const resolvedProvider =
+    provider || getProviderById(message?.configSnapshot?.providerId)
+  if (!resolvedProvider) return ''
+
+  if (resolvedProvider.buildMetadataHtmlForExport) {
+    return resolvedProvider.buildMetadataHtmlForExport(message)
   }
-  if (provider.buildMetadataHtml) {
-    return provider
+  if (resolvedProvider.buildMetadataHtml) {
+    return resolvedProvider
       .buildMetadataHtml(message)
       .split('\n')
       .map((line) => line.trim())
@@ -115,6 +180,15 @@ async function buildMessageHtml(message) {
   const senderLabel = message.sender === 'user' ? 'User' : 'Model'
   const timestamp = formatTimestamp(message.createdAt)
   const bubbleClass = message.sender === 'user' ? 'bubble-user' : 'bubble-model'
+  const provider = getProviderById(message?.configSnapshot?.providerId)
+  let systemIndicators = []
+  if (provider?.buildDisplayIndicators) {
+    try {
+      systemIndicators = provider.buildDisplayIndicators(message) || []
+    } catch (error) {
+      console.warn('Failed to build system indicators for export:', error)
+    }
+  }
 
   let mainContent = ''
   if (message.sender === 'user') {
@@ -126,8 +200,36 @@ async function buildMessageHtml(message) {
     mainContent = `<div class="prose">${renderModelSegments(segments)}</div>`
   }
 
-  const metadataHtml =
-    message.sender === 'model' ? buildSystemMeta(message) : ''
+  let systemBubbleHtml = ''
+  let metadataHtml = ''
+  if (message.sender === 'model') {
+    const rawThoughts = message.runtime?.system?.thoughts?.rawText ?? ''
+    let thoughtSegmentsHtml = ''
+    let hasThoughts = false
+    if (rawThoughts && rawThoughts.trim()) {
+      try {
+        const thoughtSegments = await parseModelResponse(rawThoughts)
+        thoughtSegmentsHtml = renderModelSegments(thoughtSegments)
+        hasThoughts = thoughtSegments.length > 0
+      } catch (error) {
+        console.warn('Failed to parse thoughts for export:', error)
+      }
+    }
+    const shouldRenderSystem =
+      systemIndicators.length > 0 ||
+      hasThoughts ||
+      message.status === 'streaming'
+    if (shouldRenderSystem) {
+      systemBubbleHtml = renderSystemBubble({
+        message,
+        indicators: systemIndicators,
+        thoughtHtml: thoughtSegmentsHtml,
+        hasThoughts,
+      })
+    }
+    metadataHtml = buildSystemMeta(message, provider)
+  }
+
   const metadataBlock = metadataHtml
     ? `<div class="metadata">${metadataHtml}</div>`
     : ''
@@ -143,6 +245,7 @@ async function buildMessageHtml(message) {
         </div>
       </div>
       <div class="message-body">
+        ${systemBubbleHtml}
         <div class="message-bubble ${bubbleClass}">
           ${errorAlert}
           ${mainContent}
@@ -194,7 +297,7 @@ export async function exportChatAsHTML(chat, messages) {
           }
 
           .chat-window {
-            padding: 24px;
+            padding: 16px 24px;
             max-width: 800px;
             margin: auto;
             background-color: var(--bg-color);
@@ -254,6 +357,100 @@ export async function exportChatAsHTML(chat, messages) {
             display: flex;
             flex-direction: column;
             gap: 8px;
+          }
+
+          .thought-stream {
+            display: flex;
+            flex-direction: column;
+          }
+
+          .thought-stream-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 10px 16px;
+            background: none;
+            border: none;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+          }
+
+          .status-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 9999px;
+            color: var(--primary-color);
+            flex-shrink: 0;
+          }
+
+          .status-icon-svg {
+            width: 16px;
+            height: 16px;
+          }
+
+          .system-summary {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: var(--text-light);
+            flex: 1;
+          }
+
+          .summary-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            position: relative;
+            padding-left: 10px;
+          }
+
+          .summary-item::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: var(--primary-color);
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+          }
+
+          .summary-item--placeholder {
+            font-style: italic;
+            padding-left: 0;
+          }
+
+          .summary-item--placeholder::before {
+            display: none;
+          }
+
+          .thought-chevron {
+            display: inline-flex;
+            align-items: center;
+            color: var(--text-light);
+          }
+
+          .chevron-icon {
+            width: 16px;
+            height: 16px;
+          }
+
+          .thought-stream-content {
+            font-size: 13px;
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 12px 16px 16px;
           }
 
           .message-bubble {
@@ -370,6 +567,41 @@ export async function exportChatAsHTML(chat, messages) {
             ${messageHtmlList.join('\n')}
           </div>
         </div>
+        <script>
+          (function () {
+            document.querySelectorAll('.thought-toggle-btn').forEach(function (button) {
+              const targetId = button.getAttribute('data-target')
+              if (!targetId) return
+              const target = document.getElementById(targetId)
+              if (!target) return
+
+              function toggleThought() {
+                const expanded = button.getAttribute('aria-expanded') === 'true'
+                const nextState = !expanded
+                button.setAttribute('aria-expanded', String(nextState))
+                if (nextState) {
+                  target.removeAttribute('hidden')
+                  target.style.display = 'block'
+                  return
+                }
+                target.setAttribute('hidden', '')
+                target.style.display = 'none'
+              }
+
+              button.addEventListener('click', function (event) {
+                event.preventDefault()
+                toggleThought()
+              })
+
+              button.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  toggleThought()
+                }
+              })
+            })
+          })();
+        </script>
       </body>
     </html>
   `

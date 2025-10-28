@@ -37,46 +37,55 @@
 
     <div class="message-body">
       <div v-if="shouldShowSystem" class="message-bubble system-bubble">
-        <div class="system-status-row">
-          <div class="status-icon" :class="{ streaming: isStreaming }">
-            <font-awesome-icon
-              :icon="isStreaming ? 'circle-notch' : ['far', 'circle']"
-              :spin="isStreaming"
-            />
-          </div>
-          <div class="system-summary">
-            <span
-              v-for="(indicator, index) in group.system.indicators"
-              :key="`indicator-${group.id}-${index}`"
-              class="summary-item"
-            >
-              <font-awesome-icon :icon="indicator.icon" />
-              <span>{{ indicator.text }}</span>
-            </span>
-          </div>
-        </div>
-
         <div
-          v-if="group.system.hasThoughts"
           class="thought-stream"
-          :class="{ collapsed: group.system.isCollapsed }"
+          :class="{
+            collapsed: group.system.isCollapsed,
+            disabled: !group.system.hasThoughts,
+          }"
         >
-          <div class="thought-stream-header">
-            <button
-              class="toggle-thoughts"
-              :aria-expanded="!group.system.isCollapsed"
-              @click="toggleThoughts"
-            >
+          <button
+            class="thought-stream-header"
+            type="button"
+            :class="{ disabled: !group.system.hasThoughts }"
+            :aria-expanded="
+              group.system.hasThoughts ? !group.system.isCollapsed : undefined
+            "
+            :aria-disabled="!group.system.hasThoughts || undefined"
+            @click="group.system.hasThoughts && toggleThoughts()"
+          >
+            <div class="status-icon" :class="{ streaming: isStreaming }">
               <font-awesome-icon
-                :icon="group.system.isCollapsed ? 'chevron-down' : 'chevron-up'"
+                :icon="isStreaming ? 'circle-notch' : ['far', 'circle']"
+                :spin="isStreaming"
               />
-            </button>
-            <font-awesome-icon icon="cogs" />
-            <span>Thoughts</span>
-          </div>
+            </div>
+            <div class="system-summary">
+              <template v-if="group.system.indicators.length">
+                <span
+                  v-for="(indicator, index) in group.system.indicators"
+                  :key="`indicator-${group.id}-${index}`"
+                  class="summary-item"
+                >
+                  <font-awesome-icon
+                    v-if="indicator.icon"
+                    :icon="indicator.icon"
+                  />
+                  <span>{{ indicator.text }}</span>
+                </span>
+              </template>
+              <span v-else class="summary-item summary-item--placeholder">
+                <span>{{ defaultSystemSummary }}</span>
+              </span>
+            </div>
+            <font-awesome-icon
+              :icon="group.system.isCollapsed ? 'chevron-down' : 'chevron-up'"
+              class="thought-chevron"
+            />
+          </button>
           <transition name="fade">
             <div
-              v-if="!group.system.isCollapsed"
+              v-if="group.system.hasThoughts && !group.system.isCollapsed"
               class="thought-stream-content"
             >
               <template
@@ -315,6 +324,14 @@ const shouldShowContentBubble = computed(() => {
   return isContentReady.value
 })
 
+const defaultSystemSummary = computed(() => {
+  if (isStreaming.value) return 'Streaming response'
+  const status = props.group.system?.status
+  if (status === 'error') return 'Generation failed'
+  if (status === 'cancelled') return 'Generation cancelled'
+  return 'No additional parameters'
+})
+
 const copyIcon = ref('copy')
 const blobUrlCache = new Map()
 
@@ -506,25 +523,12 @@ onUnmounted(() => {
   color: var(--text-color);
 }
 
-.system-bubble {
-  background-color: var(--bg-color);
-  color: var(--text-color);
-}
-
-.system-status-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
 .status-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 9999px;
   color: var(--primary-color);
   font-size: 16px;
@@ -534,6 +538,48 @@ onUnmounted(() => {
   color: var(--primary-color);
 }
 
+.thought-stream {
+  margin-top: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+
+
+.thought-stream-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.thought-stream-header.disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+.thought-stream-header.disabled:hover {
+  background: none;
+}
+
+.thought-stream-header:hover {
+  background-color: var(--bg-gray-stronger);
+}
+
+.thought-stream-header:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 2px;
+}
+
 .system-summary {
   display: flex;
   align-items: center;
@@ -541,6 +587,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   font-size: 12px;
   color: var(--text-light);
+  flex: 1;
 }
 
 .summary-item {
@@ -553,43 +600,18 @@ onUnmounted(() => {
   color: var(--text-light);
 }
 
-.toggle-thoughts {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-light);
-  padding: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.summary-item--placeholder span {
+  font-style: italic;
 }
 
-.toggle-thoughts:hover {
-  color: var(--text-color);
-}
-
-.thought-stream {
-  margin-top: 8px;
-  padding: 8px 12px;
-  background-color: var(--bg-gray);
-  border-radius: var(--border-radius);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.thought-stream.collapsed {
-  opacity: 0.9;
-}
-
-.thought-stream-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.thought-chevron {
   font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
   color: var(--text-light);
+  flex-shrink: 0;
+}
+
+.thought-stream-header.disabled .thought-chevron {
+  display: none;
 }
 
 .thought-stream-content {
@@ -598,17 +620,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.bubble-user {
-  background-color: var(--user-message-bg);
-  color: var(--text-color);
-  white-space: pre-wrap;
-}
-
-.bubble-model {
-  background-color: var(--bot-message-bg);
-  color: var(--text-color);
+  padding: 8px 12px 12px;
 }
 
 .metadata {

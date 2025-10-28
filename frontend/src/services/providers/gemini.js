@@ -248,7 +248,7 @@ export function buildDisplayIndicators(message) {
   return indicators
 }
 
-function buildMetadataLines(message) {
+function buildMetadataLines(message, { includeModelDetails = true } = {}) {
   const config = message?.configSnapshot || {}
   const metadata = message?.metadata || {}
   const params = parametersFromConfig(config)
@@ -273,7 +273,7 @@ function buildMetadataLines(message) {
   } else if (parameterParts.length) {
     firstLine = `Parameters [ ${parameterParts.join(', ')} ]`
   }
-  if (firstLine) {
+  if (firstLine && includeModelDetails) {
     lines.push(firstLine)
   }
 
@@ -340,11 +340,11 @@ function buildMetadataLines(message) {
 }
 
 export function buildMetadataHtml(message) {
-  return buildMetadataLines(message).join('\n')
+  return buildMetadataLines(message, { includeModelDetails: false }).join('\n')
 }
 
 export function buildMetadataHtmlForExport(message) {
-  return buildMetadataLines(message)
+  return buildMetadataLines(message, { includeModelDetails: false })
     .map((line) => `<div class="metadata-item">${line}</div>`)
     .join('')
 }

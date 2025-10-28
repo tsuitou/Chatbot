@@ -221,7 +221,7 @@ async function buildAttachmentRecord(file) {
   try {
     const arrayBuffer = await file.arrayBuffer()
     independentBlob = new Blob([arrayBuffer], { type: file.type })
-  } catch (error) {
+  } catch {
     // Fallback to cloning
     independentBlob = cloneBlobValue(file, { mimeType: file.type })
   }
