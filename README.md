@@ -1,4 +1,85 @@
-# Chatbot
+<div align="right">
+  <a href="#english-version"><strong>English</strong></a> | <a href="#日本語版"><strong>日本語</strong></a>
+</div>
+
+---
+
+<!-- 
+================================================================
+  English Version Section
+================================================================
+-->
+<h1 id="english-version">Chatbot</h1>
+
+<img width="1918" height="917" alt="ss" src="https://github.com/user-attachments/assets/1efce700-8e3b-4320-92f3-d4c716aac420" />
+
+## Overview
+This is a chatbot frontend for Gemini. I created it to have the features I wanted, and it is designed entirely for a desktop environment.
+* Please be aware that it has not been sufficiently tested, so there is a high possibility of bugs. Any feedback on issues found would be greatly appreciated. Performance with a large chat history has also not been verified.
+* It supports text and image generation (nano banana). Other models are listed by default but are not actually usable.
+* With the exception of function calling, it should allow for operations roughly equivalent to Google AI Studio. It also includes features like response replacement and an "Auto Inserted Messages" function.
+> The "Auto Inserted Messages" feature is similar to the "Dummy prompt" feature in the Gemini PWA. It adds User and Model role parts to the input prompt before sending the request. It also supports file attachments, allowing you to use it for tasks like attaching reference materials for style guidance that follow recent instructions.
+
+## Environment
+- Node.js
+- npm
+
+## Setup Instructions
+1. Unzip the latest zip file (`chatbot_v*.zip`) from the Releases page and navigate to the extracted directory.
+2. Ensure that your environment variables, including the path to Node.js, are set up correctly.
+3. The following configuration files are managed on the backend:
+   - `.env`: Currently used to specify the behavior of the model list.
+   - `key`: A file to write your Gemini API key into.
+   - `system_instruction.txt`: Contains the default system prompt. This content is only used when no system prompt is specified on the frontend.
+
+## How to Launch
+
+### Easy Launch (Recommended)
+**Windows:**
+Double-click `launch.bat`. This will automatically install dependencies, start the server, and open the application in your browser.
+
+**Mac/Linux:**
+Run the following command in your terminal:
+```bash
+./launch.sh
+```
+
+### Manual Launch
+1. Install the required packages (only for the first time).
+   ```bash
+   npm i
+   ```
+2. Start the server within the extracted directory.
+   ```bash
+   node server.js
+   ```
+3. Open your browser and go to `http://localhost:15101/chatbot` to use the application.
+
+## Note on Data Management
+The application uses the browser's IndexedDB to store data. Please be aware that data may be deleted due to browser settings or storage cleanup operations.
+
+## Regarding Behavior
+* The system prompt saved in the model settings on the frontend is applied as a chat-specific setting when a new chat is created. Within a chat, the chat-specific system prompt is always used.
+* If a chat-specific system prompt is not set (is blank), the backend system prompt will be used.
+* File attachments are handled using `inlineData` for files under 10MB and the `FileAPI` for files over 10MB.
+* String replacement is executed once the response has been fully received. If the format is invalid, that specific replacement process will be skipped.
+* **About the `key` file**:
+  - Initially, an empty `key` file is provided.
+  - When you set your API key and launch the application for the first time, the file is automatically renamed to `key_valid` for security purposes.
+
+<br>
+<br>
+
+---
+<br>
+<br>
+
+<!-- 
+================================================================
+  日本語版セクション
+================================================================
+-->
+<h1 id="日本語版">Chatbot</h1>
 
 <img width="1918" height="917" alt="ss" src="https://github.com/user-attachments/assets/1efce700-8e3b-4320-92f3-d4c716aac420" />
 
@@ -55,4 +136,3 @@ Gemini向けのチャットボットフロントエンドです。自分が欲�
 * **keyファイルについて**:
   - 初期状態では空の`key`ファイルが配布されます。
   - APIキーを設定して初回起動すると、セキュリティのため自動的に`key_valid`にリネームされます。
-
