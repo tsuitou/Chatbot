@@ -1,4 +1,6 @@
 # Specific files to ignore
+/.env
+/GEMINI.md
 /CLAUDE.md
 /AGENTS.md
 /compact_context.txt
