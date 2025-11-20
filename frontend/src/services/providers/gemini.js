@@ -53,19 +53,24 @@ export function createRequestPayload({
     tools: prepareToolConfig(requestConfig.tools),
   }
 
-  appendIfDefined(config, 'temperature', parameters.temperature)
-  appendIfDefined(config, 'topP', parameters.topP)
-  appendIfDefined(config, 'maxOutputTokens', parameters.maxOutputTokens)
+  const excludedKeys = ['thinkingBudget', 'thinkingLevel']
+  for (const [key, value] of Object.entries(parameters)) {
+    if (excludedKeys.includes(key)) continue
+    appendIfDefined(config, key, value)
+  }
 
   if (requestConfig.systemInstruction) {
     config.systemInstruction = requestConfig.systemInstruction
   }
 
   const thinkingBudget = parameters.thinkingBudget
+  const thinkingLevel = parameters.thinkingLevel
   const includeThoughts = options.includeThoughts
-  if (thinkingBudget != null || includeThoughts != null) {
+
+  if (thinkingBudget != null || thinkingLevel != null || includeThoughts != null) {
     const thinkingConfig = {}
     appendIfDefined(thinkingConfig, 'thinkingBudget', thinkingBudget)
+    appendIfDefined(thinkingConfig, 'thinkingLevel', thinkingLevel)
     if (includeThoughts != null) {
       thinkingConfig.includeThoughts = !!includeThoughts
     }
@@ -232,6 +237,12 @@ export function buildDisplayIndicators(message) {
       text: `Thinking Budget: ${params.thinkingBudget}`,
     })
   }
+  if (params.thinkingLevel !== undefined) {
+    indicators.push({
+      icon: 'cogs',
+      text: `Thinking Level: ${params.thinkingLevel}`,
+    })
+  }
   if (options.includeThoughts) {
     indicators.push({ icon: 'check', text: 'Include Thoughts' })
   }
@@ -262,6 +273,8 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
     parameterParts.push(`MaxTokens: ${params.maxOutputTokens}`)
   if (params.thinkingBudget !== undefined)
     parameterParts.push(`Thinking: ${params.thinkingBudget}`)
+  if (params.thinkingLevel !== undefined)
+    parameterParts.push(`Thinking Level: ${params.thinkingLevel}`)
 
   const modelLabel = config.model ? config.model : ''
   let firstLine = ''

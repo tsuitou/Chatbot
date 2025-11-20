@@ -2,12 +2,12 @@ import express from 'express'
 import cors from 'cors'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
-import { GoogleGenAI, createPartFromUri } from '@google/genai'
 import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
 import readline from 'readline'
 import dotenv from 'dotenv'
+import { GeminiProvider } from './providers/gemini.js'
 
 // --- Environment Loading ---
 const runtimeFilename = typeof __filename === 'string'
@@ -153,20 +153,22 @@ if (!apiKey) {
 const filterKeywords = (process.env.MODEL_FILTER || '').split(',')
 const connectionInfo = {}
 
-const genAI = new GoogleGenAI({ apiKey })
+// Initialize Provider
+const geminiProvider = new GeminiProvider(apiKey, defaultSystemInstruction);
 
 const DUMMY_MODEL_NAME = 'dummy'
 
 // Ensure uploads dir exists for Multer temp files
 fs.mkdirSync('uploads', { recursive: true })
 
-
-
 const upload = multer({ dest: 'uploads/' })
 
 // --- Helpers ---
 const normalizeModelName = (name) => (name || '').replace(/^models\//, '')
-const numberOr = (v, fallback) => (v === undefined ? fallback : Number(v))
+const numberOr = (v, fallback) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
 const updateConnectionInfo = (id, newStatus)  => ( newStatus === 'disconnect' ? delete connectionInfo[id] : connectionInfo[id] = { status: newStatus }  )
 
 // --- HTTP API ---
@@ -177,13 +179,8 @@ app.get('/healthz', (_req, res) => res.json({ ok: true }))
 // List models
 app.get('/api/models', async (_req, res) => {
   try {
-    const pager = await genAI.models.list()
-    const names = [DUMMY_MODEL_NAME]
-    for await (const m of pager) {
-      if (filterKeywords.some(keyword => m.name.includes(keyword.trim()))) {
-        names.push(normalizeModelName(m.name))
-      }
-    }
+    const names = await geminiProvider.listModels(filterKeywords);
+    if (!names.includes(DUMMY_MODEL_NAME)) names.unshift(DUMMY_MODEL_NAME);
     res.json(names)
   } catch (error) {
     console.error('models list error:', error?.status, error?.message)
@@ -206,7 +203,7 @@ app.get('/api/models/default', async (_req, res) => {
   }
 })
 
-// Get configurable ranges for a given model (temperature, topP, maxOutputTokens, optional thinkingBudget ranges)
+// Get configurable ranges for a given model
 app.get('/api/models/:modelName/config-ranges', async (req, res) => {
   try {
     const { modelName } = req.params
@@ -217,51 +214,22 @@ app.get('/api/models/:modelName/config-ranges', async (req, res) => {
         maxOutputTokens: { max: 0 },
       })
     }
-    const details = await genAI.models.get({ model: modelName })
-    const maxOutputTokens = Number(details?.outputTokenLimit)
-
-    const config = {
-      temperature: { min: 0.0, max: 2.0},
-      topP: { min: 0.0, max: 1.0},
-      maxOutputTokens: { max: maxOutputTokens},
-    }
-
-    // Optional: thinkingBudget ranges from local file (best-effort)
-    try {
-      const txt = fs.readFileSync('thinking_budget_ranges.json', 'utf-8')
-      const ranges = JSON.parse(txt)
-      const hit = Array.isArray(ranges) ? ranges.find(r => modelName.includes(r.modelQuery)) : null
-      if (hit?.ranges) config.thinkingBudget = { ranges: hit.ranges }
-    } catch {}
-    res.json(config)
+    
+    const ranges = await geminiProvider.getModelConfigRanges(modelName);
+    res.json(ranges);
   } catch (error) {
     console.error('config-ranges error:', error?.status, error?.message)
     res.status(500).json({ error: 'Failed to get model config ranges', message: error?.message })
   }
 })
 
-// Upload file via Files API returns the ACTIVE file metadata
+// Upload file via Files API
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.', message: 'No file uploaded.' })
 
   try {
-    const uploaded = await genAI.files.upload({
-      file: req.file.path,
-      config: { mimeType: req.file.mimetype, displayName: req.file.originalname },
-    })
-
-    let file = await genAI.files.get({ name: uploaded.name })
-    while (file.state === 'PROCESSING') {
-      await new Promise(r => setTimeout(r, 2000))
-      file = await genAI.files.get({ name: uploaded.name })
-    }
-
-    if (file.state !== 'ACTIVE') {
-      throw new Error(`File processing failed: ${file.state}`)
-    }
-
+    const file = await geminiProvider.uploadFile(req.file.path, req.file.mimetype, req.file.originalname);
     try { fs.unlinkSync(req.file.path) } catch {}
-
     res.json(file)
   } catch (error) {
     console.error('upload error:', error?.status, error?.message)
@@ -301,7 +269,7 @@ io.on('connection', (socket) => {
     try {
       if (!modelName) throw new Error('model is required')
       if (!Array.isArray(contents)) throw new Error('contents must be an array')
-      if (!config.systemInstruction) config.systemInstruction = defaultSystemInstruction
+      
       const normalizedModel = normalizeModelName(modelName)
       if (normalizedModel === DUMMY_MODEL_NAME) {
         const chunkPayload = {
@@ -313,40 +281,16 @@ io.on('connection', (socket) => {
         socket.emit('end_generation', { ok: true, chatId, requestId, finishReason: 'stop' })
         return
       }
-			const textGeneration = {
-					model: modelName,
-					contents,
-					config,
-			}
-			const imageGeneration = {
-					model: modelName,
-					contents,
-			}
-			const request = (modelName.includes('image')) ? imageGeneration : textGeneration 
+
       if (streaming) {
-        const stream = await genAI.models.generateContentStream(request)
+        const stream = geminiProvider.generateStream(modelName, contents, config || {}, chatId, requestId);
         for await (const chunk of stream) {
-          socket.emit('chunk', {
-            chatId,
-            requestId,
-            parts: chunk.candidates?.[0]?.content?.parts,
-            usage: chunk.usageMetadata,
-            finishReason: chunk.candidates?.[0]?.finishReason,
-            grounding: chunk.candidates?.[0]?.groundingMetadata,
-          })
+          socket.emit('chunk', chunk)
         }
         socket.emit('end_generation', { ok: true, chatId, requestId })
       } else {
-        const result = await genAI.models.generateContent(request)
-        const response = result
-        socket.emit('chunk', {
-          chatId,
-          requestId,
-          parts: response?.candidates?.[0]?.content?.parts,
-          usage: response?.usageMetadata,
-          finishReason: response?.candidates?.[0]?.finishReason,
-          grounding: response?.candidates?.[0]?.groundingMetadata,
-        })
+        const response = await geminiProvider.generate(modelName, contents, config || {}, chatId, requestId);
+        socket.emit('chunk', response)
         socket.emit('end_generation', { ok: true, chatId, requestId })
       }
     } catch (error) {
@@ -368,6 +312,7 @@ const rl = readline.createInterface({
 rl.on('line', (input) => {
   if (input.trim() === 'rs') {
     reloadConfig();
+    geminiProvider.setDefaultSystemInstruction(defaultSystemInstruction)
   }
 });
 

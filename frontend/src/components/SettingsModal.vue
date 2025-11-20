@@ -34,67 +34,57 @@
             </select>
           </fieldset>
 
-          <fieldset class="form-section">
+          <fieldset class="form-section" v-if="dynamicParameters.length">
             <legend class="field-legend">Generation Parameters</legend>
             <div class="settings-grid">
-              <div class="form-field">
-                <label class="form-label" for="temperature">Temperature</label>
-                <input
-                  id="temperature"
-                  v-model.number.lazy="currentSettings.parameters.temperature"
-                  type="number"
-                  class="text-input"
-                  placeholder="Default"
-                  step="any"
-                />
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="top-p">Top-P</label>
-                <input
-                  id="top-p"
-                  v-model.number.lazy="currentSettings.parameters.topP"
-                  type="number"
-                  class="text-input"
-                  placeholder="Default"
-                  step="any"
-                />
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="max-output-tokens">
-                  Max Output Tokens
-                  <span class="form-hint"
-                    >(1 ~ {{ configRanges.maxOutputTokens?.max }})</span
+              <div
+                v-for="param in dynamicParameters"
+                :key="param.key"
+                class="form-field"
+              >
+                <label class="form-label" :for="param.key">
+                  {{ param.label || param.key }}
+                  <span v-if="param.hint" class="form-hint"
+                    >({{ param.hint }})</span
                   >
                 </label>
+
+                <!-- Numeric Input -->
                 <input
-                  id="max-output-tokens"
-                  v-model.number.lazy="
-                    currentSettings.parameters.maxOutputTokens
-                  "
+                  v-if="param.type === 'number'"
+                  :id="param.key"
+                  v-model.number.lazy="currentSettings.parameters[param.key]"
                   type="number"
                   class="text-input"
-                  placeholder="Default"
+                  :placeholder="param.default !== undefined ? String(param.default) : 'Default'"
+                  :step="param.step"
+                  :min="param.min"
+                  :max="param.max"
+                  :disabled="param.disabled"
                 />
-              </div>
-              <div class="form-field">
-                <label class="form-label" for="thinking-budget">
-                  Thinking Budget
-                  <span class="form-hint">( {{ thinkingBudgetRange }} )</span>
-                </label>
-                <input
-                  id="thinking-budget"
-                  v-model.number.lazy="
-                    currentSettings.parameters.thinkingBudget
-                  "
-                  type="number"
-                  class="text-input"
-                  placeholder="Default"
-                  :disabled="thinkingBudgetRange === '(N/A)'"
-                />
+
+                <!-- Enum Select -->
+                <select
+                  v-else-if="param.type === 'enum'"
+                  :id="param.key"
+                  v-model="currentSettings.parameters[param.key]"
+                  class="select-input"
+                >
+                  <option :value="undefined">Default</option>
+                  <option
+                    v-for="opt in param.options"
+                    :key="opt.value"
+                    :value="opt.value"
+                  >
+                    {{ opt.label }}
+                  </option>
+                </select>
               </div>
             </div>
-            <label v-if="thinkingBudgetRange !== '(N/A)'" class="form-option">
-              <input
+            
+            <!-- Explicitly handle 'includeThoughts' if any thinking parameter is present -->
+            <label v-if="hasThinkingParameter" class="form-option">
+               <input
                 v-model="currentSettings.options.includeThoughts"
                 type="checkbox"
               />
@@ -102,7 +92,7 @@
             </label>
           </fieldset>
 
-          <fieldset class="form-section">
+          <fieldset class="form-section" v-if="supportsSystemInstruction">
             <legend class="field-legend">System Prompt</legend>
             <label class="form-label" for="system-prompt"
               >Custom Instruction</label
@@ -146,7 +136,6 @@ const availableModels = computed(() => store.availableModels)
 const allModelSettings = ref({})
 const selectedModel = ref('')
 const configRanges = ref({})
-const thinkingBudgetRange = ref('(N/A)')
 const isLoadingRanges = ref(false)
 const currentSettings = ref(createEmptySettings())
 
@@ -168,16 +157,6 @@ const ensureProvider = (settings) => {
     next.providerId = fallbackProviderId()
   }
   return next
-}
-
-const patchParameters = (updates) => {
-  currentSettings.value = {
-    ...currentSettings.value,
-    parameters: {
-      ...currentSettings.value.parameters,
-      ...updates,
-    },
-  }
 }
 
 const persistCurrentSettings = (modelName) => {
@@ -204,26 +183,109 @@ const loadSettingsForModel = (modelName) => {
 const fetchConfigRangesForModel = async (modelName) => {
   if (!modelName) {
     configRanges.value = {}
-    thinkingBudgetRange.value = '(N/A)'
     return
   }
   isLoadingRanges.value = true
   try {
     configRanges.value = await getConfigRanges(modelName)
-    thinkingBudgetRange.value =
-      configRanges.value.thinkingBudget?.ranges
-        ?.map((range) =>
-          typeof range === 'object' ? `${range.min} ~ ${range.max}` : range
-        )
-        .join(', ') ?? '(N/A)'
   } catch (error) {
     console.error('Failed to fetch config ranges:', error)
     configRanges.value = {}
-    thinkingBudgetRange.value = '(N/A)'
   } finally {
     isLoadingRanges.value = false
   }
 }
+
+// --- Dynamic Parameters Logic ---
+
+const dynamicParameters = computed(() => {
+  const ranges = configRanges.value || {}
+  const params = []
+
+  if (ranges.temperature) {
+    params.push({
+      key: 'temperature',
+      label: 'Temperature',
+      type: 'number',
+      min: ranges.temperature.min,
+      max: ranges.temperature.max,
+      step: ranges.temperature.step || 0.1,
+      hint: `${ranges.temperature.min} - ${ranges.temperature.max}`,
+    })
+  }
+
+  if (ranges.topP) {
+    params.push({
+      key: 'topP',
+      label: 'Top P',
+      type: 'number',
+      min: ranges.topP.min,
+      max: ranges.topP.max,
+      step: ranges.topP.step || 0.01,
+      hint: `${ranges.topP.min} - ${ranges.topP.max}`,
+    })
+  }
+
+  if (ranges.maxOutputTokens) {
+    params.push({
+      key: 'maxOutputTokens',
+      label: 'Max Output Tokens',
+      type: 'number',
+      min: 1,
+      max: ranges.maxOutputTokens.max,
+      hint: `1 - ${ranges.maxOutputTokens.max}`,
+    })
+  }
+  
+  if (ranges.thinkingBudget) { 
+      const r = ranges.thinkingBudget;
+      let rangeStr = '(N/A)';
+      if (r.ranges && Array.isArray(r.ranges)) {
+          rangeStr = r.ranges.map(x => (typeof x === 'object' ? `${x.min}-${x.max}` : x)).join(', ');
+      } else if (r.min !== undefined && r.max !== undefined) {
+          const parts = [];
+          if (r.specialValues && Array.isArray(r.specialValues)) {
+              parts.push(...r.specialValues.map(v => `${v.label} (${v.value})`));
+          }
+          parts.push(`${r.min} - ${r.max}`);
+          rangeStr = parts.join(', ');
+      }
+      
+      params.push({
+          key: 'thinkingBudget',
+          label: 'Thinking Budget',
+          type: 'number',
+          hint: rangeStr,
+          disabled: rangeStr === '(N/A)'
+      });
+  }
+
+  // Check specific keys known to be Enums
+  ['thinkingLevel'].forEach(key => {
+      if (ranges[key] && ranges[key].options) {
+          params.push({
+              key: key,
+              label: 'Thinking Level',
+              type: 'enum',
+              options: ranges[key].options
+          });
+      }
+  });
+
+  return params
+})
+
+const hasThinkingParameter = computed(() => {
+    const ranges = configRanges.value || {};
+    return !!(ranges.thinkingBudget || ranges.thinkingLevel);
+});
+
+const supportsSystemInstruction = computed(() => {
+    const features = configRanges.value?.features;
+    // Default to true if features not loaded yet or undefined, unless explicitly false
+    return features?.systemInstruction !== false;
+});
+
 
 onMounted(() => {
   window.addEventListener('mouseup', handleGlobalMouseUp)
@@ -255,49 +317,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', handleGlobalMouseUp)
 })
 
-watch(
-  () => currentSettings.value.parameters.temperature,
-  (value) => {
-    if (value === undefined || value === null || value === '') return
-    const rounded = Math.round(Number(value) * 10) / 10
-    if (Number.isFinite(rounded) && rounded !== value) {
-      patchParameters({ temperature: rounded })
-    }
-  }
-)
-
-watch(
-  () => currentSettings.value.parameters.topP,
-  (value) => {
-    if (value === undefined || value === null || value === '') return
-    const rounded = Math.round(Number(value) * 10) / 10
-    if (Number.isFinite(rounded) && rounded !== value) {
-      patchParameters({ topP: rounded })
-    }
-  }
-)
-
-watch(
-  () => currentSettings.value.parameters.maxOutputTokens,
-  (value) => {
-    if (value === undefined || value === null || value === '') return
-    const rounded = Math.round(Number(value))
-    if (Number.isFinite(rounded) && rounded !== value) {
-      patchParameters({ maxOutputTokens: rounded })
-    }
-  }
-)
-
-watch(
-  () => currentSettings.value.parameters.thinkingBudget,
-  (value) => {
-    if (value === undefined || value === null || value === '') return
-    const rounded = Math.round(Number(value))
-    if (Number.isFinite(rounded) && rounded !== value) {
-      patchParameters({ thinkingBudget: rounded })
-    }
-  }
-)
+// Watchers for numeric validation are tricky with dynamic params.
+// We can genericize them or just trust v-model.number for now.
+// Or iterate dynamicParameters to setup watchers? Vue's watchEffect might be better but complexity increases.
+// For now, we rely on v-model.number modifiers and basic input constraints.
 
 const closeModal = () => {
   emit('close')
@@ -450,8 +473,10 @@ const reset = () => {
   font-weight: 500;
   color: var(--text-color);
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .form-hint {

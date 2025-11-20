@@ -3,9 +3,15 @@ const knownParameterKeys = [
   'topP',
   'maxOutputTokens',
   'thinkingBudget',
+  'thinkingLevel',
 ]
 
-const numericParameterKeys = new Set(knownParameterKeys)
+const numericParameterKeys = new Set([
+  'temperature',
+  'topP',
+  'maxOutputTokens',
+  'thinkingBudget',
+])
 
 /**
  * Create a deep-cloned, mutable copy of the default empty settings object.
@@ -37,7 +43,9 @@ function pickParametersFromLegacy(raw) {
   if (raw?.parameters && typeof raw.parameters === 'object') {
     for (const [key, value] of Object.entries(raw.parameters)) {
       if (next[key] !== undefined) continue
-      next[key] = value
+      next[key] = numericParameterKeys.has(key)
+        ? coerceNumber(value)
+        : value
     }
   }
   return next
