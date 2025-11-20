@@ -38,7 +38,6 @@ async function main() {
       'package-lock.json',
       '.env',
       'system_instruction.txt',
-      'thinking_budget_ranges.json',
       'launch.bat',
       'launch.sh',
     ]
@@ -48,6 +47,26 @@ async function main() {
         path.join(__dirname, 'backend', file),
         path.join(tempDir, file)
       )
+    }
+
+    // 3.5 バックエンドディレクトリのコピー (追加部分)
+    const backendDirs = [
+      'capabilities',
+      'providers'
+    ]
+
+    for (const dir of backendDirs) {
+      // 存在チェックを行ってからコピー（任意の場合はtry-catchで囲むなど調整可）
+      const srcPath = path.join(__dirname, 'backend', dir)
+      const destPath = path.join(tempDir, dir)
+      
+      // ディレクトリが存在するか確認してからコピー実行
+      try {
+          await fs.access(srcPath)
+          await copyDir(srcPath, destPath)
+      } catch (error) {
+          console.warn(`Warning: Directory not found, skipping: ${srcPath}`)
+      }
     }
 
     // 4. フロントエンドdistディレクトリのコピー
