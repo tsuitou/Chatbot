@@ -1,5 +1,12 @@
 [
   {
+    "modelQuery": "3-pro",
+    "description": "Ranges for Gemini 3 Pro models.",
+    "ranges": [
+      -1
+    ]
+  },
+  {
     "modelQuery": "2.5-pro",
     "description": "Ranges for Gemini 2.5 Pro models.",
     "ranges": [

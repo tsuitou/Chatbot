@@ -1,4 +1,25 @@
 import { v4 as uuidv4 } from 'uuid'
+import { cloneAttachment } from './attachments'
+
+function createDefaultContentRuntimeState() {
+  return {
+    isStreaming: false,
+    hasText: false,
+    hasAttachments: false,
+    hasMetadata: false,
+    isReady: false,
+    updatedAt: null,
+  }
+}
+
+function ensureContentRuntime(message) {
+  if (!message) return createDefaultContentRuntimeState()
+  message.runtime = message.runtime || createInitialRuntime()
+  if (!message.runtime.content) {
+    message.runtime.content = createDefaultContentRuntimeState()
+  }
+  return message.runtime.content
+}
 
 function createInitialRuntime({
   isStreamingContent = false,
@@ -89,6 +110,45 @@ function coerceAutoSender(role) {
   return 'user'
 }
 
+function syncContentRuntimeFromMessage(message) {
+  const runtimeContent = ensureContentRuntime(message)
+  const text = message?.content?.text ?? ''
+  runtimeContent.hasText = text.trim().length > 0
+  runtimeContent.hasAttachments = Array.isArray(message?.attachments)
+    ? message.attachments.length > 0
+    : false
+  const metadata = message?.metadata ?? {}
+  runtimeContent.hasMetadata = Object.keys(metadata).some((key) => {
+    const value = metadata[key]
+    if (value === null || value === undefined) return false
+    if (typeof value === 'string') return value.trim().length > 0
+    if (typeof value === 'object') return Object.keys(value).length > 0
+    return true
+  })
+  const referenceTime = message?.updatedAt ?? Date.now()
+  runtimeContent.updatedAt = referenceTime
+  if (
+    runtimeContent.hasText ||
+    runtimeContent.hasAttachments ||
+    runtimeContent.hasMetadata
+  ) {
+    runtimeContent.isReady = true
+  }
+  // Ensure isStreaming reflects message status if not explicitly set
+  if (message?.status === 'streaming') {
+    runtimeContent.isStreaming = true
+  }
+  
+  return runtimeContent
+}
+
+function setContentStreamingState(message, isStreaming) {
+  const runtimeContent = ensureContentRuntime(message)
+  runtimeContent.isStreaming = !!isStreaming
+  runtimeContent.updatedAt = Date.now()
+  return runtimeContent
+}
+
 function buildAutoMessageEntries(autoList, { location, userSequence }) {
   if (!Array.isArray(autoList) || !autoList.length) return []
   const createdAt = Date.now()
@@ -155,53 +215,35 @@ function createModelMessage({ sequence, requestId, configSnapshot }) {
   }
 }
 
-function hydrateMessage(raw) {
+function prepareMessageForState(raw) {
   if (!raw) return null
-  const hydrated = {
+  const normalized = {
     ...raw,
-    attachments: normalizeAttachments(raw.attachments ?? [], raw.sender),
+    attachments: normalizeAttachments(raw.attachments ?? [], raw.sender).map(
+      cloneAttachment
+    ),
     configSnapshot: cloneConfigSnapshot(raw.configSnapshot),
     metadata: { ...(raw.metadata ?? {}) },
     uiFlags: { ...(raw.uiFlags ?? {}) },
     runtime: cloneRuntime(raw.runtime),
   }
-  const runtimeContent =
-    hydrated.runtime.content ||
-    (hydrated.runtime.content = {
-      isStreaming: hydrated.status === 'streaming',
-      hasText: false,
-      hasAttachments: false,
-      hasMetadata: false,
-      isReady: hydrated.status !== 'streaming',
-      updatedAt: hydrated.updatedAt ?? hydrated.createdAt ?? null,
-    })
-  const text = hydrated.content?.text ?? ''
-  runtimeContent.hasText = text.trim().length > 0
-  runtimeContent.hasAttachments = Array.isArray(hydrated.attachments)
-    ? hydrated.attachments.length > 0
-    : false
-  const metadata = hydrated.metadata ?? {}
-  runtimeContent.hasMetadata = Object.keys(metadata).length > 0
-  if (runtimeContent.isStreaming === undefined) {
-    runtimeContent.isStreaming = hydrated.status === 'streaming'
-  }
-  if (runtimeContent.isReady === undefined || runtimeContent.isReady === null) {
-    runtimeContent.isReady =
-      runtimeContent.isStreaming === false &&
-      (runtimeContent.hasText ||
-        runtimeContent.hasAttachments ||
-        runtimeContent.hasMetadata)
-  }
-  if (!runtimeContent.updatedAt) {
-    runtimeContent.updatedAt = hydrated.updatedAt ?? hydrated.createdAt ?? null
-  }
-  return hydrated
+  
+  // Ensure runtime structure exists
+  ensureContentRuntime(normalized)
+  
+  // Sync runtime state with message content
+  syncContentRuntimeFromMessage(normalized)
+  
+  return normalized
 }
+
+// Deprecated alias, keeping for backward compat if needed during refactor
+const hydrateMessage = prepareMessageForState
 
 function hydrateMessages(list) {
   if (!Array.isArray(list)) return []
   return list
-    .map(hydrateMessage)
+    .map(prepareMessageForState)
     .filter(Boolean)
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
 }
@@ -229,8 +271,12 @@ export {
   createInitialRuntime,
   createModelMessage,
   createUserMessage,
-  hydrateMessage,
+  hydrateMessage, // Deprecated but exported for safety
+  prepareMessageForState,
   hydrateMessages,
   normalizeAttachments,
   prepareRequestMessages,
+  syncContentRuntimeFromMessage,
+  setContentStreamingState,
+  ensureContentRuntime,
 }

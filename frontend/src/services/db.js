@@ -783,6 +783,29 @@ export async function deleteMessage(chatId, messageId) {
   await tx.done
 }
 
+export async function deleteMessages(chatId, messageIds) {
+  if (!Array.isArray(messageIds) || !messageIds.length) return
+  const db = await dbPromise
+  const tx = db.transaction(STORE_NAME, 'readwrite')
+  const store = tx.store
+  const chat = await ensureChat(store, chatId)
+
+  for (const messageId of messageIds) {
+    const range = IDBKeyRange.bound(
+      [messageId, -Infinity],
+      [messageId, Infinity]
+    )
+    const atts = await store.index(IDX_ATTACHMENT_BY_MESSAGE).getAll(range)
+    for (const att of atts || []) {
+      await store.delete(att.id)
+    }
+    await store.delete(messageId)
+  }
+
+  await store.put({ ...chat, lastModified: now() })
+  await tx.done
+}
+
 export async function deleteChat(chatId) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readwrite')

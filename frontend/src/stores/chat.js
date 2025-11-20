@@ -25,8 +25,10 @@ import {
   cloneConfigSnapshot,
   normalizeAttachments,
   prepareRequestMessages,
-  cloneRuntime,
-  createInitialRuntime,
+  prepareMessageForState,
+  syncContentRuntimeFromMessage,
+  setContentStreamingState,
+  ensureContentRuntime,
 } from '../services/chatFlow'
 
 const DEFAULT_TITLE = 'New Chat'
@@ -73,74 +75,6 @@ function cloneChatMeta(meta) {
     createdAt: meta.createdAt,
     lastModified: meta.lastModified,
     isBookmarked: meta.isBookmarked ?? false,
-  }
-}
-
-function createDefaultContentRuntimeState() {
-  return {
-    isStreaming: false,
-    hasText: false,
-    hasAttachments: false,
-    hasMetadata: false,
-    isReady: false,
-    updatedAt: null,
-  }
-}
-
-function ensureContentRuntime(message) {
-  if (!message) return createDefaultContentRuntimeState()
-  message.runtime = message.runtime || createInitialRuntime()
-  if (!message.runtime.content) {
-    message.runtime.content = createDefaultContentRuntimeState()
-  }
-  return message.runtime.content
-}
-
-function syncContentRuntimeFromMessage(message) {
-  const runtimeContent = ensureContentRuntime(message)
-  const text = message?.content?.text ?? ''
-  runtimeContent.hasText = text.trim().length > 0
-  runtimeContent.hasAttachments = Array.isArray(message?.attachments)
-    ? message.attachments.length > 0
-    : false
-  const metadata = message?.metadata ?? {}
-  runtimeContent.hasMetadata = Object.keys(metadata).some((key) => {
-    const value = metadata[key]
-    if (value === null || value === undefined) return false
-    if (typeof value === 'string') return value.trim().length > 0
-    if (typeof value === 'object') return Object.keys(value).length > 0
-    return true
-  })
-  const referenceTime = message?.updatedAt ?? Date.now()
-  runtimeContent.updatedAt = referenceTime
-  if (
-    runtimeContent.hasText ||
-    runtimeContent.hasAttachments ||
-    runtimeContent.hasMetadata
-  ) {
-    runtimeContent.isReady = true
-  }
-  return runtimeContent
-}
-
-function setContentStreamingState(message, isStreaming) {
-  const runtimeContent = ensureContentRuntime(message)
-  runtimeContent.isStreaming = !!isStreaming
-  runtimeContent.updatedAt = Date.now()
-  return runtimeContent
-}
-
-function normalizeMessageForState(message) {
-  return {
-    ...message,
-    attachments: normalizeAttachments(
-      message.attachments ?? [],
-      message.sender
-    ).map(cloneAttachment),
-    configSnapshot: cloneConfigSnapshot(message.configSnapshot),
-    metadata: { ...(message.metadata ?? {}) },
-    uiFlags: { ...(message.uiFlags ?? {}) },
-    runtime: cloneRuntime(message.runtime),
   }
 }
 
@@ -377,7 +311,7 @@ export const useChatStore = defineStore('chat', {
 
     _appendMessage(message) {
       if (!this.chatState.active) return
-      this.chatState.active.messages.push(normalizeMessageForState(message))
+      this.chatState.active.messages.push(prepareMessageForState(message))
       sortMessagesBySequence(this.chatState.active.messages)
     },
 
@@ -387,7 +321,7 @@ export const useChatStore = defineStore('chat', {
         (m) => m.id === message.id
       )
       if (idx === -1) return
-      this.chatState.active.messages[idx] = normalizeMessageForState(message)
+      this.chatState.active.messages[idx] = prepareMessageForState(message)
       sortMessagesBySequence(this.chatState.active.messages)
     },
 
@@ -421,8 +355,7 @@ export const useChatStore = defineStore('chat', {
         const raw = await db.getMessageWithAttachments(chatId, messageId)
         if (!raw) return null
         const [hydrated] = hydrateMessages([raw])
-        if (!hydrated) return null
-        return normalizeMessageForState(hydrated)
+        return hydrated || null
       } catch (error) {
         console.warn(
           'Failed to load message with attachments from IndexedDB:',
@@ -928,6 +861,19 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    async deleteMessages(messageIds) {
+      if (!this.chatState.active || !Array.isArray(messageIds) || !messageIds.length) return
+
+      try {
+        await db.deleteMessages(this.chatState.active.meta.id, messageIds)
+        messageIds.forEach((id) => this._removeMessage(id))
+        this._touchActiveChat()
+      } catch (error) {
+        console.error('Failed to delete messages:', error)
+        showErrorToast('Failed to delete messages.')
+      }
+    },
+
     async updateTitle(newTitle) {
       if (
         !this.chatState.active ||
@@ -1029,6 +975,143 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    async _executeGeneration({ chatId, requestMessages, modelMessage, requestConfig }) {
+      const requestId = modelMessage.requestId
+      
+      // Update UI state
+      this._setGenerationState(GenerationStatus.STREAMING, {
+        messageId: modelMessage.id,
+        requestId,
+        providerId: requestConfig.providerId,
+      })
+      this._touchActiveChat()
+      this.bumpScrollSignal()
+
+      try {
+        const payload = await apiAdapter.createApiRequest({
+          chatId,
+          messages: requestMessages,
+          model: requestConfig.model,
+          requestConfig,
+          streaming: requestConfig.streaming,
+          requestId,
+        })
+
+        // Check if generation was cancelled or switched during preparation
+        const activeChatId = this.chatState.active?.meta?.id
+        const currentStream = this.generationState.stream
+        const trackedMessage = this._findMessageById(modelMessage.id)
+        const isSameRequest =
+          currentStream?.requestId === requestId &&
+          currentStream?.messageId === modelMessage.id
+
+        if (
+          activeChatId !== chatId ||
+          this.generationState.status !== GenerationStatus.STREAMING ||
+          !isSameRequest ||
+          !trackedMessage ||
+          trackedMessage.status !== 'streaming' ||
+          trackedMessage.requestId !== requestId
+        ) {
+          return
+        }
+
+        recordDebugRequest(payload)
+        startGeneration(payload)
+      } catch (error) {
+        console.error('Failed to start generation:', error)
+        showErrorToast('Failed to send message. Please try again.')
+        
+        // Cleanup model message on immediate failure
+        this._setGenerationState(GenerationStatus.ERROR, null, error)
+        this._removeMessage(modelMessage.id)
+        try {
+          await db.deleteMessage(chatId, modelMessage.id)
+        } catch (cleanupError) {
+          console.warn('Cleanup failed for message', modelMessage.id, cleanupError)
+        }
+      }
+    },
+
+    async sendMessage() {
+      const prompt = this.composerState.prompt || ''
+      const requestConfig = this.currentRequestConfig
+
+      this.cancelEditing()
+
+      if (!requestConfig.model) {
+        showErrorToast('Please select a model before sending.')
+        return
+      }
+
+      const chatConfigStore = useChatConfigStore()
+      const attachments = this.composerState.attachmentBucket.list()
+      const tempMessageIds = []
+
+      try {
+        const chatId = await this.ensureActiveChat(prompt)
+        if (!chatId) throw new Error('Active chat not available')
+
+        const messages = this.activeMessages
+        const userSequence = nextSequence(messages)
+        const userMessage = createUserMessage({
+          sequence: userSequence,
+          text: prompt,
+          attachments,
+          configSnapshot: requestConfig,
+        })
+        // Pre-hydrate/normalize to ensure consistency before saving/appending
+        prepareMessageForState(userMessage)
+        
+        await db.saveMessage(chatId, userMessage)
+        tempMessageIds.push(userMessage.id)
+        this._appendMessage(userMessage)
+
+        const modelSequence = nextSequence(this.activeMessages)
+        const requestId = uuidv4()
+        const modelMessage = createModelMessage({
+          sequence: modelSequence,
+          requestId,
+          configSnapshot: requestConfig,
+        })
+        prepareMessageForState(modelMessage)
+
+        await db.saveMessage(chatId, modelMessage)
+        tempMessageIds.push(modelMessage.id)
+        this._appendMessage(modelMessage)
+        
+        // Clear composer
+        this.composerState.prompt = ''
+        this.composerState.attachmentBucket.clear()
+
+        const historyMessages = this.activeMessages.filter(
+          (m) => (m.sequence ?? 0) <= userSequence
+        )
+        const autoMessages = chatConfigStore.serializeAutoMessages(chatId)
+        const requestMessages = prepareRequestMessages({
+          historyMessages,
+          autoMessages,
+          anchorSequence: userSequence,
+        })
+
+        await this._executeGeneration({
+          chatId,
+          requestMessages,
+          modelMessage,
+          requestConfig
+        })
+
+      } catch (error) {
+        console.error('Failed to setup message:', error)
+        showErrorToast('Failed to setup message. Please try again.')
+        this._setGenerationState(GenerationStatus.ERROR, null, error)
+
+        if (this.chatState.active?.meta?.id && tempMessageIds.length) {
+          await this.deleteMessages(tempMessageIds)
+        }
+      }
+    },
+
     async resendMessage(messageId) {
       if (!this.chatState.active) return
       let target = this._findMessageById(messageId)
@@ -1039,14 +1122,9 @@ export const useChatStore = defineStore('chat', {
       }
 
       const chatId = this.chatState.active.meta.id
-
       const chatConfigStore = useChatConfigStore()
-      const sortedMessages = [...this.activeMessages].sort(
-        (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
-      )
-      const targetIndex = sortedMessages.findIndex((m) => m.id === messageId)
-      if (targetIndex === -1) return
-
+      
+      // Identify configuration for resend
       const fallbackConfig = cloneConfigSnapshot(target.configSnapshot) || {}
       const currentConfig = cloneConfigSnapshot(this.currentRequestConfig) || {}
       const mergedTools = {
@@ -1062,55 +1140,55 @@ export const useChatStore = defineStore('chat', {
         ...fallbackConfig,
         ...currentConfig,
         tools: mergedTools,
-        streaming: streamingPreference ?? true,
+        streaming: !!(streamingPreference ?? true),
       }
-
-      requestConfig.streaming = !!requestConfig.streaming
 
       if (!requestConfig.model) {
         showErrorToast('Please select a model before resending.')
         return
       }
 
-      const targetSequence = target.sequence ?? 0
+      const sortedMessages = [...this.activeMessages].sort(
+        (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
+      )
+      const targetIndex = sortedMessages.findIndex((m) => m.id === messageId)
+      
+      // Determine prune candidates
       const pruneCandidates =
         target.sender === 'model'
           ? sortedMessages.slice(targetIndex)
           : sortedMessages.slice(targetIndex + 1)
+      const pruneIds = pruneCandidates.map(m => m.id)
 
-      let responseMessage = null
       try {
-        const failedPrunes = []
-        for (const candidate of pruneCandidates) {
-          try {
-            await db.deleteMessage(chatId, candidate.id)
-            this._removeMessage(candidate.id)
-          } catch (error) {
-            console.error('Failed to prune message:', candidate.id, error)
-            failedPrunes.push(candidate.id)
-          }
+        // Batch delete from DB and State
+        if (pruneIds.length) {
+          await this.deleteMessages(pruneIds)
         }
 
-        if (failedPrunes.length) {
-          showErrorToast('Failed to prune existing messages. Please try again.')
-          return
-        }
-
+        // Re-sort and touch chat
         sortMessagesBySequence(this.activeMessages)
         this._touchActiveChat()
 
+        // Re-evaluate history
         const baselineMessages = [...this.activeMessages].sort(
           (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
         )
 
         let history = []
+        const targetSequence = target.sequence ?? 0
+        
         if (target.sender === 'model') {
+          // If we pruned the model message itself, history is everything before it
           history = baselineMessages.filter(
             (m) => (m.sequence ?? 0) < targetSequence
           )
         } else {
+          // If we pruned after the user message, that user message is the new anchor
+          // We need to make sure the target user message is still in activeMessages (it should be)
           const refreshedTarget = this._findMessageById(messageId)
           if (!refreshedTarget) {
+             // Should not happen if delete logic is correct
             this._setGenerationState(GenerationStatus.IDLE)
             return
           }
@@ -1119,84 +1197,52 @@ export const useChatStore = defineStore('chat', {
           )
         }
 
+        // Prepare request context
         const anchorMessage = [...history]
           .reverse()
           .find((msg) => msg.sender === 'user')
+        
         let requestMessages = [...history]
         const autoMessages = chatConfigStore.serializeAutoMessages(chatId)
+        
+        // Calculate anchor sequence for auto-messages
+        let anchorSequence = targetSequence
         if (anchorMessage) {
-          requestMessages = prepareRequestMessages({
-            historyMessages: requestMessages,
-            autoMessages,
-            anchorSequence: anchorMessage.sequence ?? 0,
-          })
-        } else {
-          const fallbackSequence =
-            requestMessages.length > 0
-              ? (requestMessages[requestMessages.length - 1].sequence ??
-                targetSequence)
-              : targetSequence
-          requestMessages = prepareRequestMessages({
-            historyMessages: requestMessages,
-            autoMessages,
-            anchorSequence: fallbackSequence,
-          })
+          anchorSequence = anchorMessage.sequence ?? 0
+        } else if (requestMessages.length > 0) {
+          anchorSequence = requestMessages[requestMessages.length - 1].sequence ?? targetSequence
         }
 
+        requestMessages = prepareRequestMessages({
+          historyMessages: requestMessages,
+          autoMessages,
+          anchorSequence,
+        })
+
         const requestId = uuidv4()
+        // If replacing a model message, reuse its sequence, otherwise next available
         const responseSequence =
           target.sender === 'model' && targetSequence != null
             ? targetSequence
             : nextSequence(this.activeMessages)
-        responseMessage = createModelMessage({
+            
+        const responseMessage = createModelMessage({
           sequence: responseSequence,
           requestId,
           configSnapshot: requestConfig,
         })
-
-        setContentStreamingState(responseMessage, true)
-        syncContentRuntimeFromMessage(responseMessage)
+        prepareMessageForState(responseMessage)
 
         await db.saveMessage(chatId, responseMessage)
         this._appendMessage(responseMessage)
-        this.bumpScrollSignal()
 
-        this._setGenerationState(GenerationStatus.STREAMING, {
-          messageId: responseMessage.id,
-          requestId,
-          providerId: requestConfig.providerId || getDefaultProviderId(),
-        })
-
-        const payload = await apiAdapter.createApiRequest({
+        await this._executeGeneration({
           chatId,
-          messages: requestMessages,
-          model: requestConfig.model,
-          requestConfig,
-          streaming: requestConfig.streaming ?? true,
-          requestId,
+          requestMessages,
+          modelMessage: responseMessage,
+          requestConfig
         })
 
-        const activeChatId = this.chatState.active?.meta?.id
-        const currentStream = this.generationState.stream
-        const trackedMessage = this._findMessageById(responseMessage.id)
-        const isSameRequest =
-          currentStream?.requestId === requestId &&
-          currentStream?.messageId === responseMessage.id
-
-        if (
-          activeChatId !== chatId ||
-          this.generationState.status !== GenerationStatus.STREAMING ||
-          !isSameRequest ||
-          !trackedMessage ||
-          trackedMessage.status !== 'streaming' ||
-          trackedMessage.requestId !== requestId
-        ) {
-          return
-        }
-
-        this._touchActiveChat()
-        recordDebugRequest(payload)
-        startGeneration(payload)
       } catch (error) {
         console.error('Failed to resend message:', error)
         const message =
@@ -1204,18 +1250,6 @@ export const useChatStore = defineStore('chat', {
           error?.error ||
           'Failed to resend message. Please try again.'
         showErrorToast(message)
-        if (responseMessage?.id) {
-          this._removeMessage(responseMessage.id)
-          try {
-            await db.deleteMessage(chatId, responseMessage.id)
-          } catch (cleanupError) {
-            console.warn(
-              'Cleanup failed for resend response message',
-              responseMessage.id,
-              cleanupError
-            )
-          }
-        }
         this._setGenerationState(GenerationStatus.ERROR, null, error)
       }
     },
