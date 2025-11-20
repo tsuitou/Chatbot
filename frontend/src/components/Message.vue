@@ -261,67 +261,9 @@ const metadataSegments = computed(() => {
     .filter(Boolean)
 })
 
-const hasContentSegments = computed(
-  () =>
-    Array.isArray(props.group?.content?.segments) &&
-    props.group.content.segments.length > 0
-)
-
-const hasPlainTextContent = computed(() => {
-  const rawText = props.group?.message?.content?.text
-  return typeof rawText === 'string' && rawText.trim().length > 0
-})
-
-const hasAttachments = computed(
-  () =>
-    Array.isArray(props.group?.content?.attachments) &&
-    props.group.content.attachments.length > 0
-)
-
-const hasMetadata = computed(
-  () =>
-    Array.isArray(metadataSegments.value) && metadataSegments.value.length > 0
-)
-
-const runtimeContent = computed(
-  () => props.group?.message?.runtime?.content || null
-)
-
-const runtimeHasRenderableContent = computed(() => {
-  const runtime = runtimeContent.value
-  if (!runtime) {
-    return (
-      hasContentSegments.value ||
-      hasPlainTextContent.value ||
-      hasAttachments.value ||
-      hasMetadata.value
-    )
-  }
-  if (runtime.hasText || runtime.hasAttachments || runtime.hasMetadata) {
-    return true
-  }
-  return (
-    hasContentSegments.value ||
-    hasPlainTextContent.value ||
-    hasAttachments.value ||
-    hasMetadata.value
-  )
-})
-
-const isContentReady = computed(() => {
-  if (isUserMessage.value) return true
-  const runtime = runtimeContent.value
-  if (!runtime) return runtimeHasRenderableContent.value
-  if (runtime.isStreaming) {
-    return !!runtime.isReady
-  }
-  return runtime.isReady || runtimeHasRenderableContent.value
-})
-
 const shouldShowContentBubble = computed(() => {
   if (isEditing.value && editAreaReady.value) return false
-  if (isUserMessage.value) return true
-  return isContentReady.value
+  return props.group.content.shouldRender
 })
 
 const defaultSystemSummary = computed(() => {

@@ -331,6 +331,13 @@ export const useDisplayStore = defineStore('display', {
           message.status === 'completed' ? buildMetadataHtml(message) : '',
       }
 
+      // Determine if content bubble should be rendered
+      const hasRenderableContent =
+        content.segments.length > 0 ||
+        content.attachments.length > 0 ||
+        !!content.metadataHtml
+      content.shouldRender = message.sender === 'user' || hasRenderableContent
+
       return {
         id: message.id,
         sender: message.sender,
