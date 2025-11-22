@@ -105,9 +105,12 @@ export function parseStreamChunk(rawChunk) {
   let textContent = ''
   let thoughtContent = ''
   const attachments = []
+  const thoughtSignatures = []
+  const seenSignatures = new Set()
 
   if (Array.isArray(rawChunk.parts)) {
-    for (const part of rawChunk.parts) {
+    for (let idx = 0; idx < rawChunk.parts.length; idx++) {
+      const part = rawChunk.parts[idx]
       if (part.text) {
         if (part.thought) {
           thoughtContent += part.text
@@ -135,6 +138,14 @@ export function parseStreamChunk(rawChunk) {
           blob,
         })
       }
+      if (part.thoughtSignature) {
+        const sig = String(part.thoughtSignature)
+        const key = `${idx}:${sig}`
+        if (!seenSignatures.has(key)) {
+          seenSignatures.add(key)
+          thoughtSignatures.push({ signature: sig, partIndex: idx })
+        }
+      }
     }
   }
 
@@ -149,6 +160,9 @@ export function parseStreamChunk(rawChunk) {
   }
 
   const metadata = {}
+  if (thoughtSignatures.length) {
+    metadata.thoughtSignatures = thoughtSignatures
+  }
 
   if (rawChunk.finishReason) {
     metadata.finishReason = rawChunk.finishReason
@@ -210,6 +224,7 @@ function optionsFromConfig(config) {
 export function buildDisplayIndicators(message) {
   const indicators = []
   const config = message?.configSnapshot || {}
+  const metadata = message?.metadata || {}
   const params = parametersFromConfig(config)
   const options = optionsFromConfig(config)
 
@@ -296,6 +311,9 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
   const output = usage.output ?? usage.candidatesTokenCount
   const reasoning = usage.reasoning ?? usage.thoughtsTokenCount
   const total = usage.total ?? usage.totalTokenCount
+  const signatureCount = Array.isArray(metadata.thoughtSignatures)
+    ? metadata.thoughtSignatures.length
+    : 0
   const usageParts = []
   if (prompt != null) usageParts.push(`Prompt: ${prompt}`)
   if (output != null) usageParts.push(`Output: ${output}`)
@@ -308,6 +326,9 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
   }
   if (finishReason) {
     detailSegments.push(`Finish [ ${finishReason} ]`)
+  }
+  if (signatureCount > 0) {
+    detailSegments.push(`Thought Signatures [ ${signatureCount} ]`)
   }
   if (detailSegments.length) {
     lines.push(detailSegments.join(', '))

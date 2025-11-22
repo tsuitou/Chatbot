@@ -57,6 +57,30 @@ async function buildMessageParts(message) {
     parts.push({ text: '' })
   }
 
+  const thoughtSignatures = Array.isArray(message?.metadata?.thoughtSignatures)
+    ? message.metadata.thoughtSignatures
+    : []
+  if (thoughtSignatures.length) {
+    const seen = new Set()
+    for (const entry of thoughtSignatures) {
+      const signature = entry?.signature ?? entry
+      if (!signature) continue
+      const targetIndex =
+        typeof entry?.partIndex === 'number' &&
+        entry.partIndex >= 0 &&
+        entry.partIndex < parts.length
+          ? entry.partIndex
+          : 0
+      const key = `${targetIndex}:${signature}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const target = parts[targetIndex] || parts[0]
+      if (target) {
+        target.thoughtSignature = signature
+      }
+    }
+  }
+
   return parts
 }
 

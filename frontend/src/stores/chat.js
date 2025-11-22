@@ -668,6 +668,40 @@ export const useChatStore = defineStore('chat', {
         Object.assign(metadata, rawChunk.metadata)
       }
 
+      // Merge thought signatures (append unique by signature+index)
+      const mergeThoughtSignatures = (incoming = []) => {
+        if (!Array.isArray(incoming) || !incoming.length) return
+        const existing = Array.isArray(metadata.thoughtSignatures)
+          ? [...metadata.thoughtSignatures]
+          : []
+        const seen = new Set(
+          existing.map((item) => {
+            const sig = item?.signature ?? item
+            const idx = item?.partIndex ?? 0
+            return `${idx}:${sig}`
+          })
+        )
+        for (const item of incoming) {
+          const sig = item?.signature ?? item
+          if (!sig) continue
+          const idx =
+            typeof item?.partIndex === 'number' && item.partIndex >= 0
+              ? item.partIndex
+              : 0
+          const key = `${idx}:${sig}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          existing.push({ signature: sig, partIndex: idx })
+        }
+        metadata.thoughtSignatures = existing
+      }
+      mergeThoughtSignatures(message.metadata?.thoughtSignatures)
+      if (parsed.metadata?.thoughtSignatures) {
+        mergeThoughtSignatures(parsed.metadata.thoughtSignatures)
+      } else if (rawChunk.metadata?.thoughtSignatures) {
+        mergeThoughtSignatures(rawChunk.metadata.thoughtSignatures)
+      }
+
       if (!metadata.usage) {
         const usage =
           parsed.metadata?.usage ||
