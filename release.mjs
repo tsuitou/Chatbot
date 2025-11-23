@@ -52,7 +52,8 @@ async function main() {
     // 3.5 バックエンドディレクトリのコピー (追加部分)
     const backendDirs = [
       'capabilities',
-      'providers'
+      'providers',
+			'agent'
     ]
 
     for (const dir of backendDirs) {
