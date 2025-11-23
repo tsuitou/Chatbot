@@ -121,7 +121,7 @@ function accumulateFromCalls(acc, functionCalls) {
 function formatGroundingSummary(acc, { maxSources = 10, maxQueries = 10 } = {}) {
   const sources = Array.from(acc.sources.entries())
     .slice(0, maxSources)
-    .map(([uri, title]) => `- ${title}: ${uri}`)
+    .map(([uri, title]) => `- ${title || '(no title)'} (${uri})`)
   const queries = Array.from(acc.queries).slice(0, maxQueries)
   const parts = []
   if (sources.length) {
