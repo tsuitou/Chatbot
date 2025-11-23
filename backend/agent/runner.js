@@ -779,6 +779,7 @@ export async function runAgentSession({
         'Use your prior findings; do NOT shorten or further summarize. Keep headings and bullet details.',
         'Format the answer in Markdown with clear headings and bullet lists.',
         'Do not call tools. Reuse the tool outputs from earlier steps (Plan/Research) that are in chat history; integrate all gathered facts.',
+        'At the end, add a "Sources" section listing only the source titles (NO URLs). Example: "- Source 1: [title]". Do NOT print URLs.',
         'If any information might be stale, note it explicitly (e.g., "要確認"). Avoid outdated library/product names; prefer current names/versions.',
         'If Research did not find complete information, acknowledge the gaps. Do NOT fill gaps with your own knowledge.',
         '',
