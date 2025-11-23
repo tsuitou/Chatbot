@@ -8,6 +8,7 @@ import path from 'path'
 import readline from 'readline'
 import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
+import { runAgentSession } from './agent/runner.js'
 
 // --- Environment Loading ---
 const runtimeFilename = typeof __filename === 'string'
@@ -158,6 +159,17 @@ const geminiProvider = new GeminiProvider(apiKey, defaultSystemInstruction);
 
 const DUMMY_MODEL_NAME = 'dummy'
 
+// Agent model definitions: virtual name -> actual base model mapping
+const AGENT_MODELS = {
+  'agent-gemini-2.5-flash': 'gemini-2.5-flash',
+  'agent-gemini-2.5-pro': 'gemini-2.5-pro',
+  'agent-gemini-3-pro-preview': 'gemini-3-pro-preview',
+}
+
+// Helper to check if a model name is an agent model
+const isAgentModel = (modelName) => modelName in AGENT_MODELS
+const getAgentBaseModel = (modelName) => AGENT_MODELS[modelName]
+
 // Ensure uploads dir exists for Multer temp files
 fs.mkdirSync('uploads', { recursive: true })
 
@@ -181,6 +193,12 @@ app.get('/api/models', async (_req, res) => {
   try {
     const names = await geminiProvider.listModels(filterKeywords);
     if (!names.includes(DUMMY_MODEL_NAME)) names.unshift(DUMMY_MODEL_NAME);
+
+    // Add all agent models to the list
+    for (const agentModel of Object.keys(AGENT_MODELS).reverse()) {
+      if (!names.includes(agentModel)) names.unshift(agentModel);
+    }
+
     res.json(names)
   } catch (error) {
     console.error('models list error:', error?.status, error?.message)
@@ -271,6 +289,23 @@ io.on('connection', (socket) => {
       if (!Array.isArray(contents)) throw new Error('contents must be an array')
       
       const normalizedModel = normalizeModelName(modelName)
+
+      // Check if this is an agent model
+      if (isAgentModel(normalizedModel)) {
+        await runAgentSession({
+          apiKey,
+          baseModel: getAgentBaseModel(normalizedModel),
+          defaultSystemInstruction,
+          userSystemInstruction: config?.systemInstruction,
+          requestConfig: config || {},
+          contents,
+          socket,
+          chatId,
+          requestId,
+        })
+        return
+      }
+
       if (normalizedModel === DUMMY_MODEL_NAME) {
         const chunkPayload = {
           chatId,
