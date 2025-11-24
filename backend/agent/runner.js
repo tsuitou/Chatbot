@@ -1,10 +1,5 @@
 import { GoogleGenAI } from '@google/genai'
 
-// Merge default/agent/user system instructions with clear separators.
-function mergeSystemInstructions(base, agentAddendum, user) {
-  return [base, agentAddendum, user].filter(Boolean).join('\n\n---\n\n')
-}
-
 // Extract control_step action from function calls (handles both object and JSON string args).
 function extractStepAction(functionCalls) {
   if (!Array.isArray(functionCalls)) return null
@@ -643,14 +638,23 @@ export async function runAgentSession({
 
   const baseSystem = [
     criticalAgentRules,
-    defaultSystemInstruction,
-    agentPersonaInstruction,
-    searchPolicyInstruction,
-    flowInstruction,
-    userSystemInstruction,
+    '',
+    defaultSystemInstruction
+      ? `${'='.repeat(80)}\nBASE SYSTEM INSTRUCTION\n${'='.repeat(80)}\n\n${defaultSystemInstruction}`
+      : null,
+    '',
+    `${'='.repeat(80)}\nAGENT PERSONA AND CAPABILITIES\n${'='.repeat(80)}\n\n${agentPersonaInstruction}`,
+    '',
+    `${'='.repeat(80)}\nSEARCH POLICY\n${'='.repeat(80)}\n\n${searchPolicyInstruction}`,
+    '',
+    `${'='.repeat(80)}\nAGENT WORKFLOW\n${'='.repeat(80)}\n\n${flowInstruction}`,
+    '',
+    userSystemInstruction
+      ? `${'='.repeat(80)}\nUSER-SPECIFIED INSTRUCTION\n${'='.repeat(80)}\n\n${userSystemInstruction}`
+      : null,
   ]
     .filter(Boolean)
-    .join('\n\n')
+    .join('\n')
 
   const chat = ai.chats.create({
     model: baseModel,
@@ -680,7 +684,9 @@ export async function runAgentSession({
     '=== USER REQUEST ===',
     extractUserText(contents),
     '',
-    userUrls.length ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}` : null,
+    userUrls.length
+      ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
+      : null,
     '',
     agentAddendumPlan,
   ]
@@ -735,13 +741,17 @@ export async function runAgentSession({
       '=== CRITICAL: You MUST call googleSearch and/or urlContext ===',
       'This step requires tool usage. Do NOT output only text without calling tools.',
       '',
-      stepNotes.length ? `=== PLAN_OUTPUT (from previous step) ===\n${stepNotes.join('\n\n')}` : '=== NO PLAN_OUTPUT ===\nNo plan available. Determine what to research based on user request.',
+      stepNotes.length
+        ? `=== PLAN_OUTPUT (from previous step) ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
+        : '=== NO PLAN_OUTPUT ===\nNo plan available. Determine what to research based on user request.',
       '',
       researchGroundingSummary
-        ? `=== SOURCES/QUERIES GATHERED SO FAR ===\n${researchGroundingSummary}`
+        ? `=== SOURCES/QUERIES GATHERED SO FAR ===\n${researchGroundingSummary}\n`
         : '=== NO SOURCES YET ===\nNo sources gathered yet. Start researching now.',
       '',
-      userUrls.length ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}` : null,
+      userUrls.length
+        ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
+        : null,
       '',
       agentAddendumResearch,
     ]
@@ -798,11 +808,17 @@ export async function runAgentSession({
       '=== CRITICAL: You MUST call control_step function ===',
       'After brief analysis, immediately call control_step with action=research or action=final.',
       '',
-      stepNotes.length ? `=== ALL NOTES SO FAR ===\n${stepNotes.join('\n\n---\n\n')}` : '=== NO NOTES ===\nNo previous notes available.',
+      stepNotes.length
+        ? `=== ALL NOTES SO FAR ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
+        : '=== NO NOTES ===\nNo previous notes available.',
       '',
-      groundingSummaryLoop ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummaryLoop}` : '=== NO SOURCES YET ===\nNo sources gathered yet.',
+      groundingSummaryLoop
+        ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummaryLoop}\n`
+        : '=== NO SOURCES YET ===\nNo sources gathered yet.',
       '',
-      userUrls.length ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}` : null,
+      userUrls.length
+        ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
+        : null,
       '',
       agentAddendumControl,
     ]
@@ -898,11 +914,17 @@ export async function runAgentSession({
         '',
         '=== ALL INFORMATION SOURCES (READ CAREFULLY) ===',
         '',
-        stepNotes.length ? `${stepNotes.join('\n\n---\n\n')}` : 'No PLAN or RESEARCH notes available.',
+        stepNotes.length
+          ? `${stepNotes.join('\n\n---\n\n')}\n`
+          : 'No PLAN or RESEARCH notes available.',
         '',
-        groundingSummary ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}` : '',
+        groundingSummary
+          ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}\n`
+          : '',
         '',
-        userUrls.length ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}` : '',
+        userUrls.length
+          ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
+          : '',
         '',
         '=== ORIGINAL USER REQUEST ===',
         extractUserText(contents) || '(No user request text available)',
