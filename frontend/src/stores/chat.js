@@ -11,10 +11,7 @@ import {
   cloneSettings as cloneModelSettings,
 } from '../services/modelConfig'
 import { getDefaultProviderId } from '../services/providers'
-import {
-  createAttachmentBucket,
-  cloneAttachment,
-} from '../services/attachments'
+import { createAttachmentBucket } from '../services/attachments'
 import { useChatConfigStore } from './chatConfig'
 import { applyResponseTransforms } from '../services/responseTransforms'
 import { useDebugStore } from './debug'
@@ -490,120 +487,6 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    async sendMessage() {
-      const prompt = this.composerState.prompt || ''
-      const requestConfig = this.currentRequestConfig
-
-      this.cancelEditing()
-
-      if (!requestConfig.model) {
-        showErrorToast('Please select a model before sending.')
-        return
-      }
-
-      const chatConfigStore = useChatConfigStore()
-      const attachments = this.composerState.attachmentBucket.list()
-      const tempMessageIds = []
-
-      try {
-        const chatId = await this.ensureActiveChat(prompt)
-        if (!chatId) throw new Error('Active chat not available')
-
-        const messages = this.activeMessages
-        const userSequence = nextSequence(messages)
-        const userMessage = createUserMessage({
-          sequence: userSequence,
-          text: prompt,
-          attachments,
-          configSnapshot: requestConfig,
-        })
-        setContentStreamingState(userMessage, false)
-        syncContentRuntimeFromMessage(userMessage)
-        await db.saveMessage(chatId, userMessage)
-        tempMessageIds.push(userMessage.id)
-        this._appendMessage(userMessage)
-
-        const modelSequence = nextSequence(this.activeMessages)
-        const requestId = uuidv4()
-        const modelMessage = createModelMessage({
-          sequence: modelSequence,
-          requestId,
-          configSnapshot: requestConfig,
-        })
-        setContentStreamingState(modelMessage, true)
-        syncContentRuntimeFromMessage(modelMessage)
-        await db.saveMessage(chatId, modelMessage)
-        tempMessageIds.push(modelMessage.id)
-        this._appendMessage(modelMessage)
-        this.bumpScrollSignal()
-
-        this._setGenerationState(GenerationStatus.STREAMING, {
-          messageId: modelMessage.id,
-          requestId,
-          providerId: requestConfig.providerId,
-        })
-        this.composerState.prompt = ''
-        this.composerState.attachmentBucket.clear()
-        this._touchActiveChat()
-        this.bumpScrollSignal()
-
-        const historyMessages = this.activeMessages.filter(
-          (m) => (m.sequence ?? 0) <= userSequence
-        )
-        const autoMessages = chatConfigStore.serializeAutoMessages(chatId)
-        const requestMessages = prepareRequestMessages({
-          historyMessages,
-          autoMessages,
-          anchorSequence: userSequence,
-        })
-
-        const payload = await apiAdapter.createApiRequest({
-          chatId,
-          messages: requestMessages,
-          model: requestConfig.model,
-          requestConfig,
-          streaming: requestConfig.streaming,
-          requestId,
-        })
-
-        const activeChatId = this.chatState.active?.meta?.id
-        const currentStream = this.generationState.stream
-        const trackedMessage = this._findMessageById(modelMessage.id)
-        const isSameRequest =
-          currentStream?.requestId === requestId &&
-          currentStream?.messageId === modelMessage.id
-
-        if (
-          activeChatId !== chatId ||
-          this.generationState.status !== GenerationStatus.STREAMING ||
-          !isSameRequest ||
-          !trackedMessage ||
-          trackedMessage.status !== 'streaming' ||
-          trackedMessage.requestId !== requestId
-        ) {
-          return
-        }
-
-        recordDebugRequest(payload)
-        startGeneration(payload)
-      } catch (error) {
-        console.error('Failed to send message:', error)
-        showErrorToast('Failed to send message. Please try again.')
-        this._setGenerationState(GenerationStatus.ERROR, null, error)
-
-        if (this.chatState.active?.meta?.id && tempMessageIds.length) {
-          for (const id of tempMessageIds) {
-            try {
-              await db.deleteMessage(this.chatState.active.meta.id, id)
-            } catch (cleanupError) {
-              console.warn('Cleanup failed for message', id, cleanupError)
-            }
-          }
-        }
-        tempMessageIds.forEach((id) => this._removeMessage(id))
-      }
-    },
-
     async handleStreamChunk(rawChunk) {
       if (!this.chatState.active || !this.isGenerating) return
       if (rawChunk.chatId !== this.chatState.active.meta.id) return
@@ -896,7 +779,12 @@ export const useChatStore = defineStore('chat', {
     },
 
     async deleteMessages(messageIds) {
-      if (!this.chatState.active || !Array.isArray(messageIds) || !messageIds.length) return
+      if (
+        !this.chatState.active ||
+        !Array.isArray(messageIds) ||
+        !messageIds.length
+      )
+        return
 
       try {
         await db.deleteMessages(this.chatState.active.meta.id, messageIds)
@@ -1009,9 +897,14 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    async _executeGeneration({ chatId, requestMessages, modelMessage, requestConfig }) {
+    async _executeGeneration({
+      chatId,
+      requestMessages,
+      modelMessage,
+      requestConfig,
+    }) {
       const requestId = modelMessage.requestId
-      
+
       // Update UI state
       this._setGenerationState(GenerationStatus.STREAMING, {
         messageId: modelMessage.id,
@@ -1055,14 +948,18 @@ export const useChatStore = defineStore('chat', {
       } catch (error) {
         console.error('Failed to start generation:', error)
         showErrorToast('Failed to send message. Please try again.')
-        
+
         // Cleanup model message on immediate failure
         this._setGenerationState(GenerationStatus.ERROR, null, error)
         this._removeMessage(modelMessage.id)
         try {
           await db.deleteMessage(chatId, modelMessage.id)
         } catch (cleanupError) {
-          console.warn('Cleanup failed for message', modelMessage.id, cleanupError)
+          console.warn(
+            'Cleanup failed for message',
+            modelMessage.id,
+            cleanupError
+          )
         }
       }
     },
@@ -1096,7 +993,7 @@ export const useChatStore = defineStore('chat', {
         })
         // Pre-hydrate/normalize to ensure consistency before saving/appending
         prepareMessageForState(userMessage)
-        
+
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
         this._appendMessage(userMessage)
@@ -1113,7 +1010,7 @@ export const useChatStore = defineStore('chat', {
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
         this._appendMessage(modelMessage)
-        
+
         // Clear composer
         this.composerState.prompt = ''
         this.composerState.attachmentBucket.clear()
@@ -1132,9 +1029,8 @@ export const useChatStore = defineStore('chat', {
           chatId,
           requestMessages,
           modelMessage,
-          requestConfig
+          requestConfig,
         })
-
       } catch (error) {
         console.error('Failed to setup message:', error)
         showErrorToast('Failed to setup message. Please try again.')
@@ -1157,7 +1053,7 @@ export const useChatStore = defineStore('chat', {
 
       const chatId = this.chatState.active.meta.id
       const chatConfigStore = useChatConfigStore()
-      
+
       // Identify configuration for resend
       const fallbackConfig = cloneConfigSnapshot(target.configSnapshot) || {}
       const currentConfig = cloneConfigSnapshot(this.currentRequestConfig) || {}
@@ -1186,13 +1082,13 @@ export const useChatStore = defineStore('chat', {
         (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
       )
       const targetIndex = sortedMessages.findIndex((m) => m.id === messageId)
-      
+
       // Determine prune candidates
       const pruneCandidates =
         target.sender === 'model'
           ? sortedMessages.slice(targetIndex)
           : sortedMessages.slice(targetIndex + 1)
-      const pruneIds = pruneCandidates.map(m => m.id)
+      const pruneIds = pruneCandidates.map((m) => m.id)
 
       try {
         // Batch delete from DB and State
@@ -1211,7 +1107,7 @@ export const useChatStore = defineStore('chat', {
 
         let history = []
         const targetSequence = target.sequence ?? 0
-        
+
         if (target.sender === 'model') {
           // If we pruned the model message itself, history is everything before it
           history = baselineMessages.filter(
@@ -1222,7 +1118,7 @@ export const useChatStore = defineStore('chat', {
           // We need to make sure the target user message is still in activeMessages (it should be)
           const refreshedTarget = this._findMessageById(messageId)
           if (!refreshedTarget) {
-             // Should not happen if delete logic is correct
+            // Should not happen if delete logic is correct
             this._setGenerationState(GenerationStatus.IDLE)
             return
           }
@@ -1235,16 +1131,18 @@ export const useChatStore = defineStore('chat', {
         const anchorMessage = [...history]
           .reverse()
           .find((msg) => msg.sender === 'user')
-        
+
         let requestMessages = [...history]
         const autoMessages = chatConfigStore.serializeAutoMessages(chatId)
-        
+
         // Calculate anchor sequence for auto-messages
         let anchorSequence = targetSequence
         if (anchorMessage) {
           anchorSequence = anchorMessage.sequence ?? 0
         } else if (requestMessages.length > 0) {
-          anchorSequence = requestMessages[requestMessages.length - 1].sequence ?? targetSequence
+          anchorSequence =
+            requestMessages[requestMessages.length - 1].sequence ??
+            targetSequence
         }
 
         requestMessages = prepareRequestMessages({
@@ -1259,7 +1157,7 @@ export const useChatStore = defineStore('chat', {
           target.sender === 'model' && targetSequence != null
             ? targetSequence
             : nextSequence(this.activeMessages)
-            
+
         const responseMessage = createModelMessage({
           sequence: responseSequence,
           requestId,
@@ -1274,9 +1172,8 @@ export const useChatStore = defineStore('chat', {
           chatId,
           requestMessages,
           modelMessage: responseMessage,
-          requestConfig
+          requestConfig,
         })
-
       } catch (error) {
         console.error('Failed to resend message:', error)
         const message =

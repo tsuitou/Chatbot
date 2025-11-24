@@ -67,7 +67,11 @@ export function createRequestPayload({
   const thinkingLevel = parameters.thinkingLevel
   const includeThoughts = options.includeThoughts
 
-  if (thinkingBudget != null || thinkingLevel != null || includeThoughts != null) {
+  if (
+    thinkingBudget != null ||
+    thinkingLevel != null ||
+    includeThoughts != null
+  ) {
     const thinkingConfig = {}
     appendIfDefined(thinkingConfig, 'thinkingBudget', thinkingBudget)
     appendIfDefined(thinkingConfig, 'thinkingLevel', thinkingLevel)
@@ -224,7 +228,6 @@ function optionsFromConfig(config) {
 export function buildDisplayIndicators(message) {
   const indicators = []
   const config = message?.configSnapshot || {}
-  const metadata = message?.metadata || {}
   const params = parametersFromConfig(config)
   const options = optionsFromConfig(config)
 

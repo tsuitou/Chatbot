@@ -297,7 +297,7 @@ export const useDisplayStore = defineStore('display', {
       // so they don't strictly need to be in this key for the *inner* structure,
       // but if the provider logic depends on them, we might.
       // For now, we rely on the fact that isCollapsed/shouldRender are assigned purely in _syncFromMessages.
-      
+
       return `${message.id}|${message.updatedAt}|${message.status}|${textLen}|${thoughtLen}|${attachLen}|${indicatorCount}`
     },
 
@@ -316,7 +316,7 @@ export const useDisplayStore = defineStore('display', {
         isStreamingThoughts: !!thoughtsState.isStreaming,
         updatedAt: thoughtsState.updatedAt || null,
         // These will be overridden in _syncFromMessages
-        isCollapsed: true, 
+        isCollapsed: true,
         shouldRender: false,
       }
 

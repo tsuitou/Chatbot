@@ -34,7 +34,7 @@
             </select>
           </fieldset>
 
-          <fieldset class="form-section" v-if="dynamicParameters.length">
+          <fieldset v-if="dynamicParameters.length" class="form-section">
             <legend class="field-legend">Generation Parameters</legend>
             <div class="settings-grid">
               <div
@@ -56,7 +56,11 @@
                   v-model.number.lazy="currentSettings.parameters[param.key]"
                   type="number"
                   class="text-input"
-                  :placeholder="param.default !== undefined ? String(param.default) : 'Default'"
+                  :placeholder="
+                    param.default !== undefined
+                      ? String(param.default)
+                      : 'Default'
+                  "
                   :step="param.step"
                   :min="param.min"
                   :max="param.max"
@@ -81,10 +85,10 @@
                 </select>
               </div>
             </div>
-            
+
             <!-- Explicitly handle 'includeThoughts' if any thinking parameter is present -->
             <label v-if="hasThinkingParameter" class="form-option">
-               <input
+              <input
                 v-model="currentSettings.options.includeThoughts"
                 type="checkbox"
               />
@@ -92,7 +96,7 @@
             </label>
           </fieldset>
 
-          <fieldset class="form-section" v-if="supportsSystemInstruction">
+          <fieldset v-if="supportsSystemInstruction" class="form-section">
             <legend class="field-legend">System Prompt</legend>
             <label class="form-label" for="system-prompt"
               >Custom Instruction</label
@@ -236,56 +240,57 @@ const dynamicParameters = computed(() => {
       hint: `1 - ${ranges.maxOutputTokens.max}`,
     })
   }
-  
-  if (ranges.thinkingBudget) { 
-      const r = ranges.thinkingBudget;
-      let rangeStr = '(N/A)';
-      if (r.ranges && Array.isArray(r.ranges)) {
-          rangeStr = r.ranges.map(x => (typeof x === 'object' ? `${x.min}-${x.max}` : x)).join(', ');
-      } else if (r.min !== undefined && r.max !== undefined) {
-          const parts = [];
-          if (r.specialValues && Array.isArray(r.specialValues)) {
-              parts.push(...r.specialValues.map(v => `${v.label} (${v.value})`));
-          }
-          parts.push(`${r.min} - ${r.max}`);
-          rangeStr = parts.join(', ');
+
+  if (ranges.thinkingBudget) {
+    const r = ranges.thinkingBudget
+    let rangeStr = '(N/A)'
+    if (r.ranges && Array.isArray(r.ranges)) {
+      rangeStr = r.ranges
+        .map((x) => (typeof x === 'object' ? `${x.min}-${x.max}` : x))
+        .join(', ')
+    } else if (r.min !== undefined && r.max !== undefined) {
+      const parts = []
+      if (r.specialValues && Array.isArray(r.specialValues)) {
+        parts.push(...r.specialValues.map((v) => `${v.label} (${v.value})`))
       }
-      
-      params.push({
-          key: 'thinkingBudget',
-          label: 'Thinking Budget',
-          type: 'number',
-          hint: rangeStr,
-          disabled: rangeStr === '(N/A)'
-      });
+      parts.push(`${r.min} - ${r.max}`)
+      rangeStr = parts.join(', ')
+    }
+
+    params.push({
+      key: 'thinkingBudget',
+      label: 'Thinking Budget',
+      type: 'number',
+      hint: rangeStr,
+      disabled: rangeStr === '(N/A)',
+    })
   }
 
   // Check specific keys known to be Enums
-  ['thinkingLevel'].forEach(key => {
-      if (ranges[key] && ranges[key].options) {
-          params.push({
-              key: key,
-              label: 'Thinking Level',
-              type: 'enum',
-              options: ranges[key].options
-          });
-      }
-  });
+  ;['thinkingLevel'].forEach((key) => {
+    if (ranges[key] && ranges[key].options) {
+      params.push({
+        key: key,
+        label: 'Thinking Level',
+        type: 'enum',
+        options: ranges[key].options,
+      })
+    }
+  })
 
   return params
 })
 
 const hasThinkingParameter = computed(() => {
-    const ranges = configRanges.value || {};
-    return !!(ranges.thinkingBudget || ranges.thinkingLevel);
-});
+  const ranges = configRanges.value || {}
+  return !!(ranges.thinkingBudget || ranges.thinkingLevel)
+})
 
 const supportsSystemInstruction = computed(() => {
-    const features = configRanges.value?.features;
-    // Default to true if features not loaded yet or undefined, unless explicitly false
-    return features?.systemInstruction !== false;
-});
-
+  const features = configRanges.value?.features
+  // Default to true if features not loaded yet or undefined, unless explicitly false
+  return features?.systemInstruction !== false
+})
 
 onMounted(() => {
   window.addEventListener('mouseup', handleGlobalMouseUp)

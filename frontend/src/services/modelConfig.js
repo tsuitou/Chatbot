@@ -43,9 +43,7 @@ function pickParametersFromLegacy(raw) {
   if (raw?.parameters && typeof raw.parameters === 'object') {
     for (const [key, value] of Object.entries(raw.parameters)) {
       if (next[key] !== undefined) continue
-      next[key] = numericParameterKeys.has(key)
-        ? coerceNumber(value)
-        : value
+      next[key] = numericParameterKeys.has(key) ? coerceNumber(value) : value
     }
   }
   return next

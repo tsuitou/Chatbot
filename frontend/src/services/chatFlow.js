@@ -138,7 +138,7 @@ function syncContentRuntimeFromMessage(message) {
   if (message?.status === 'streaming') {
     runtimeContent.isStreaming = true
   }
-  
+
   return runtimeContent
 }
 
@@ -227,13 +227,13 @@ function prepareMessageForState(raw) {
     uiFlags: { ...(raw.uiFlags ?? {}) },
     runtime: cloneRuntime(raw.runtime),
   }
-  
+
   // Ensure runtime structure exists
   ensureContentRuntime(normalized)
-  
+
   // Sync runtime state with message content
   syncContentRuntimeFromMessage(normalized)
-  
+
   return normalized
 }
 
