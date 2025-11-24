@@ -1230,7 +1230,7 @@ export async function runAgentSession({
     collectText: true,
     extractBlocks: ['CLARIFY_OUTPUT'],
     config: {
-      tools: [{ googleSearch: {} }],
+      tools: [{ googleSearch: {} }, { urlContext: {} }],
       thinkingConfig: baseThinking,
     },
   })
@@ -1673,7 +1673,7 @@ export async function runAgentSession({
         requestId,
         step: 'final',
         debugLog: debugMode,
-        config: { tools: [], thinkingConfig: baseThinking },
+        config: { tools: [{ googleSearch: {} }, { urlContext: {} }], thinkingConfig: baseThinking },
       })
 
       const groundingMetadata = buildGroundingMetadata(groundingAcc)
