@@ -184,13 +184,21 @@ export function parseStreamChunk(rawChunk) {
     }
   }
 
-  if (rawChunk.grounding) {
-    const grounding = rawChunk.grounding
+  const grounding = rawChunk.grounding || rawChunk.metadata?.grounding
+  if (grounding) {
     const sources = []
     if (Array.isArray(grounding.groundingChunks)) {
       for (const chunk of grounding.groundingChunks) {
         const uri = chunk.web?.uri
         const title = chunk.web?.title
+        if (uri && title) {
+          sources.push({ uri, title })
+        }
+      }
+    } else if (Array.isArray(grounding.sources)) {
+      for (const src of grounding.sources) {
+        const uri = src?.uri
+        const title = src?.title
         if (uri && title) {
           sources.push({ uri, title })
         }
@@ -358,19 +366,16 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
     const sourceLinks = sources
       .map((src) => {
         const safeUri = escapeHtml(src.uri)
-        const safeTitle = escapeHtml(src.title)
+        const safeTitle = escapeHtml(src.title || src.uri)
         return `<a href="${safeUri}" target="_blank">${safeTitle}</a>`
       })
       .join(', ')
-    groundingSegments.push(`Grounding Sources [ ${sourceLinks} ]`)
+    lines.push(`Grounding Sources: ${sourceLinks}`)
   }
 
   if (Array.isArray(queries) && queries.length) {
-    groundingSegments.push(`Search Queries [ ${queries.join(', ')} ]`)
-  }
-
-  if (groundingSegments.length) {
-    lines.push(groundingSegments.join(', '))
+    const safeQueries = queries.map((q) => escapeHtml(q)).join(', ')
+    lines.push(`Search Queries: ${safeQueries}`)
   }
 
   return lines
