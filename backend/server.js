@@ -292,12 +292,15 @@ io.on('connection', (socket) => {
 
       // Check if this is an agent model
       if (isAgentModel(normalizedModel)) {
+        const userSelectedModel = getAgentBaseModel(normalizedModel)
+        const configWithModel = { ...(config || {}), model: userSelectedModel }
+        const agentBaseModel = process.env.AGENT_BASE_MODEL
         await runAgentSession({
           apiKey,
-          baseModel: getAgentBaseModel(normalizedModel),
+          baseModel: agentBaseModel,
           defaultSystemInstruction,
           userSystemInstruction: config?.systemInstruction,
-          requestConfig: config || {},
+          requestConfig: configWithModel,
           contents,
           socket,
           chatId,

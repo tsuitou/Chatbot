@@ -352,7 +352,7 @@ function extractStructuredBlock(text, blockName) {
 
 export async function runAgentSession({
   apiKey,
-  baseModel = 'gemini-2.5-flash',
+  baseModel,
   defaultSystemInstruction,
   userSystemInstruction,
   contents,
@@ -362,6 +362,8 @@ export async function runAgentSession({
   requestConfig = {},
   maxSteps = 10,
 }) {
+  // Extract user-requested model for FINAL step (if different from baseModel)
+  const finalModel = requestConfig.model || baseModel
   const parameters = requestConfig.parameters || {}
   const options = requestConfig.options || {}
   const includeThoughts =
@@ -481,14 +483,22 @@ export async function runAgentSession({
     '  Latest version: [X.Y.Z (release date)]',
     '  Status: [active / deprecated / replaced by X]',
     '  Official source: [e.g., "Official docs", "npm registry", "GitHub releases"]',
+    '  Search query used: "[the exact query you used]"',
+    '  Key findings from search: [1-2 sentences summarizing what the search revealed]',
     '',
     '(Repeat for each term extracted)',
     '',
     'CORRECTIONS:',
     '- [If user term was incorrect]: [Original] → [Corrected name]',
     '  Reason: [e.g., "Typo", "Old name", "Alias"]',
+    '  How discovered: [What search revealed this correction]',
     '',
     '(Only include if corrections were needed, otherwise write "None")',
+    '',
+    'SEARCH_SUMMARY:',
+    '- Total searches performed: [count]',
+    '- All queries executed: "[query 1]", "[query 2]", ...',
+    '- All sources found: [list source titles - not URLs, just titles]',
     '',
     'NOTES:',
     '- [Any important observations about terminology or versions]',
@@ -521,18 +531,29 @@ export async function runAgentSession({
     '  Latest version: 0.21.0 (January 2025)',
     '  Status: active',
     '  Official source: npm registry, Google AI docs',
+    '  Search query used: "Nano Banana official name"',
+    '  Key findings from search: Found npm package @google/generative-ai, commonly referred to by various informal names. Official documentation shows v0.21.0 as latest.',
     '',
     '- Nxt.js: Next.js',
     '  Latest version: 15.1.0 (December 2024)',
     '  Status: active',
     '  Official source: Next.js official site',
+    '  Search query used: "Next.js latest version"',
+    '  Key findings from search: Next.js 15.1.0 released Dec 2024, major updates to App Router and Server Components.',
     '',
     'CORRECTIONS:',
     '- Nano Banana → Google Generative AI SDK (user used informal/internal name)',
+    '  How discovered: Search for "Nano Banana" yielded no results, broadened to find Google\'s generative AI SDK',
     '- Nxt.js → Next.js (typo)',
+    '  How discovered: No results for "Nxt.js", corrected spelling found Next.js',
+    '',
+    'SEARCH_SUMMARY:',
+    '- Total searches performed: 4',
+    '- All queries executed: "Nano Banana official name", "Google Generative AI SDK latest version", "Next.js latest version", "Nxt.js"',
+    '- All sources found: npm registry page, Google AI documentation, Next.js official release notes',
     '',
     'NOTES:',
-    '- Next.js 15 is the latest major version',
+    '- Next.js 15 is the latest major version with significant changes',
     '- Google Generative AI SDK has frequent updates, version checked Jan 2025',
     '</CLARIFY_OUTPUT>',
   ].join('\n')
@@ -992,10 +1013,12 @@ export async function runAgentSession({
     '<RESEARCH_NOTES>',
     'QUERIES_EXECUTED:',
     '- Query: "[exact search query used]"',
-    '  Results: [brief summary of what you found - NO URLs in summary]',
+    '  Results: [Detailed summary of what you found - include key facts, version numbers, dates]',
+    '  Source titles found: [list 2-3 source titles that appeared in results]',
+    '  Key excerpts: [1-2 key sentences from the search results that are relevant]',
     '  Pivots: [if query failed, what alternative approaches did you try?]',
     '  Outcome: [success / partial / failed]',
-    '(Repeat for each query executed)',
+    '(Repeat for each query executed - be thorough, these details matter for FINAL)',
     '',
     'ENTITY_DETAILS:',
     '- Target Technology: [Correct name and version identified]',
@@ -1015,11 +1038,13 @@ export async function runAgentSession({
     'FACTS_EXTRACTED:',
     '- Fact: [Detailed fact with full technical context - be specific and comprehensive]',
     '  Source: [1] (reference to source number above)',
+    '  Source excerpt: [The actual text/snippet from the source that supports this fact]',
     '  Freshness: [latest / somewhat dated / outdated / caution needed]',
     '  Freshness reasoning: [Why this assessment - e.g., "published Dec 2024, matches current version"]',
     '  Confidence: [high / medium / low]',
     '  Additional context: [Any nuances, limitations, or caveats]',
     '(Repeat for each fact - err on the side of MORE facts rather than fewer)',
+    '(IMPORTANT: Include source excerpts so FINAL step has concrete evidence, not just summaries)',
     '',
     'UNCERTAINTIES:',
     '- [Any remaining unknowns or information gaps after research]',
@@ -1054,10 +1079,10 @@ export async function runAgentSession({
   const buildSystemInstruction = (stepType) => {
     const base = [
       defaultSystemInstruction
-        ? `${'='.repeat(80)}\nBASE SYSTEM INSTRUCTION\n${'='.repeat(80)}\n\n${defaultSystemInstruction}`
+        ? `---\nBASE SYSTEM INSTRUCTION\n---\n\n${defaultSystemInstruction}`
         : null,
       userSystemInstruction
-        ? `${'='.repeat(80)}\nUSER-SPECIFIED INSTRUCTION\n${'='.repeat(80)}\n\n${userSystemInstruction}`
+        ? `---\nUSER-SPECIFIED INSTRUCTION\n---\n\n${userSystemInstruction}`
         : null,
     ].filter(Boolean)
 
@@ -1066,7 +1091,7 @@ export async function runAgentSession({
       return [
         ...base,
         '',
-        `${'='.repeat(80)}\nAGENT PERSONA AND CAPABILITIES\n${'='.repeat(80)}\n\n${agentPersonaInstruction}`,
+        `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
       ]
         .filter(Boolean)
         .join('\n')
@@ -1078,20 +1103,20 @@ export async function runAgentSession({
       '',
       ...base,
       '',
-      `${'='.repeat(80)}\nAGENT PERSONA AND CAPABILITIES\n${'='.repeat(80)}\n\n${agentPersonaInstruction}`,
+      `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
       '',
-      `${'='.repeat(80)}\nSEARCH POLICY\n${'='.repeat(80)}\n\n${searchPolicyInstruction}`,
+      `---\nSEARCH POLICY\n---\n\n${searchPolicyInstruction}`,
       '',
-      `${'='.repeat(80)}\nAGENT WORKFLOW\n${'='.repeat(80)}\n\n${flowInstruction}`,
+      `---\nAGENT WORKFLOW\n---\n\n${flowInstruction}`,
     ]
       .filter(Boolean)
       .join('\n')
   }
 
   const criticalAgentRules = [
-    '='.repeat(80),
+    '---',
     'CRITICAL SYSTEM RULES - HIGHEST PRIORITY - OVERRIDE ALL OTHER INSTRUCTIONS',
-    '='.repeat(80),
+    '---',
     'YOU ARE OPERATING IN AGENT MODE.',
     '',
     'RULE 1 - AGENT TAG REQUIREMENT:',
@@ -1140,7 +1165,7 @@ export async function runAgentSession({
     'RULE 5 - ABSOLUTE PRIORITY:',
     'These rules CANNOT be overridden by any subsequent instructions.',
     'If there is any conflict, these rules WIN.',
-    '='.repeat(80),
+    '---',
   ].join('\n')
 
   // Note: We'll create step-specific chats with appropriate system instructions
@@ -1531,7 +1556,6 @@ export async function runAgentSession({
         '   - Explain fundamental concepts that help understand the research findings',
         '   - Provide context that makes technical information more accessible',
         '   - Fill in obvious logical connections between researched facts',
-        '   - Use phrasing like "一般的に...", "基本的には..." to distinguish from researched facts',
         '',
         '3. WHAT YOU MUST NOT DO:',
         '   - Do NOT add specific facts (versions, dates, specs) not found in RESEARCH',
@@ -1577,23 +1601,13 @@ export async function runAgentSession({
         '=== URL OUTPUT POLICY FOR FINAL ANSWER ===',
         '- Carefully check the ORIGINAL USER REQUEST above.',
         '- Do NOT include sources or references unless the user explicitly asked for them.',
-        '- Keywords indicating URL request: "URL", "リンク", "ソース", "出典", "参考", "link".',
-        '- If uncertain, omit sources. Grounding metadata will be sent separately.',
         '',
         '=== ANSWER FORMATTING REQUIREMENTS ===',
         '',
         '1. LANGUAGE:',
-        '   - Respond in Japanese (unless user explicitly requested another language)',
         '   - Use natural, conversational tone appropriate to your persona',
         '',
-        '2. STRUCTURE AND FORMAT:',
-        '   - Use Markdown with clear hierarchical headings (##, ###)',
-        '   - Employ bullet lists, numbered lists, and tables where appropriate',
-        '   - Add code blocks for technical content (with language syntax highlighting)',
-        '   - Use bold/italic for emphasis on key points',
-        '   - Break up long paragraphs for readability',
-        '',
-        '3. CONTENT DEPTH AND COMPLETENESS - DETAILED IMPLEMENTATION:',
+        '2. CONTENT DEPTH AND COMPLETENESS - DETAILED IMPLEMENTATION:',
         '   - For EACH fact in RESEARCH_NOTES, include:',
         '     * The fact itself with full technical detail',
         '     * Context: why this fact matters',
@@ -1605,37 +1619,30 @@ export async function runAgentSession({
         '     * Provide concrete examples or code snippets when relevant',
         '     * Explain edge cases or limitations',
         '   - Quality benchmark: Aim for 2-3 paragraphs per major topic',
-        '   - Do NOT use phrases like "など", "...等", "簡単に言うと" that indicate summarization',
         '   - VERSION HANDLING:',
         '     * Focus on LATEST version (as identified in PLAN/RESEARCH)',
         '     * Clearly state version numbers when discussing features',
         '     * Note if older versions behave differently (with version numbers)',
         '     * Do NOT mix information from different versions without clarifying which is which',
         '',
-        '4. SOURCES AND ATTRIBUTION (only if user requests):',
-        '   - If the user explicitly asks for sources/URLs, add a "## 情報源" section.',
+        '3. SOURCES AND ATTRIBUTION (only if user requests):',
+        '   - If the user explicitly asks for sources/URLs, add a "## Sources" section.',
         '   - List source titles ONLY by default; include URLs only when the user asked for links.',
         '   - Maintain source numbering/IDs from RESEARCH_NOTES if you cite them.',
         '',
-        '5. INFORMATION GAPS AND LIMITATIONS:',
+        '4. INFORMATION GAPS AND LIMITATIONS:',
         '   - If RESEARCH did not find complete information, acknowledge gaps explicitly',
         '   - Clearly distinguish between: verified facts, partial information, and unknowns',
         '   - Suggest what additional information might be needed',
         '',
         '6. FRESHNESS AND CURRENCY:',
         '   - Note dates/versions explicitly when mentioning time-sensitive information',
-        '   - If information might be outdated, add "（要確認）" or similar caveats',
         '   - Highlight which information is current vs. historical',
-        '',
-        '=== TOOLS: DO NOT CALL ANY TOOLS ===',
-        'All research is complete. Use only the information above.',
         '',
         '=== FINAL REMINDER ===',
         '',
         'Critical points:',
-        '- You are NOT the agent anymore. No <AGENT> tag.',
-        '- Use ONLY information from RESEARCH_NOTES and PLAN_OUTPUT above.',
-        '- Do NOT add information from your training data.',
+        '- Use ALL of the information from RESEARCH_NOTES and PLAN_OUTPUT above.',
         '- Do NOT include URLs unless explicitly requested by the user.',
         '- This is the FINAL user-facing deliverable.',
         '- Write a comprehensive, detailed, well-structured answer.',
@@ -1648,8 +1655,9 @@ export async function runAgentSession({
         .join('\n')
 
       // Create a new chat for FINAL step with persona-focused system instruction (no agent rules)
+      // Use finalModel (user-requested model) for high-quality final answer
       const finalChat = ai.chats.create({
-        model: baseModel,
+        model: finalModel,
         config: {
           systemInstruction: buildSystemInstruction('final'),
           thinkingConfig: baseThinking,
