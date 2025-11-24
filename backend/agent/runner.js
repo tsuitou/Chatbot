@@ -1224,6 +1224,12 @@ export async function runAgentSession({
     }
   }
 
+  // Format grounding summary from CLARIFY for PLAN
+  const clarifyGroundingSummary = formatGroundingSummary(groundingAcc, {
+    maxSources: 20,
+    maxQueries: 20,
+  })
+
   // --- Plan stage (always once) ---
   const planPrompt = [
     'STEP=PLAN',
@@ -1243,6 +1249,10 @@ export async function runAgentSession({
     stepNotes.length
       ? `=== CLARIFY_OUTPUT (from previous step) ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
       : '=== NO CLARIFY_OUTPUT ===\nNo terminology verification available.',
+    '',
+    clarifyGroundingSummary
+      ? `=== SOURCES FOUND IN CLARIFY STEP ===\nThe CLARIFY step already searched and found these sources.\nThese are VERIFIED and TRUSTWORTHY - do not doubt them:\n\n${clarifyGroundingSummary}\n`
+      : '',
     '',
     '=== USER REQUEST ===',
     extractUserText(contents),
