@@ -40,6 +40,28 @@ function extractStepAction(functionCalls) {
 // Track the last step to detect step transitions
 let lastEmittedStep = null
 
+// Mandatory instruction injected into user prompts to enforce urlContext grounding
+const mandatoryFinalUrlInstruction =
+  'MANDATORY: Final answer must cite and be grounded in urlContext (browse) results for all FINAL_URLS. If URLs cannot be fetched, state the failure and do not answer from memory.'
+
+// Build urlContextMetadata from groundingMetadata if present
+function buildUrlContextMetadata(meta) {
+  if (!meta || typeof meta !== 'object') return null
+  if (meta.urlContextMetadata) return meta.urlContextMetadata
+  if (Array.isArray(meta.urlContexts)) return { urlContexts: meta.urlContexts }
+  if (Array.isArray(meta.groundingChunks)) {
+    const urlContexts = meta.groundingChunks
+      .map((chunk) => ({
+        uri: chunk?.web?.uri,
+        title: chunk?.web?.title,
+        passages: chunk?.web?.passages,
+      }))
+      .filter((c) => c.uri)
+    if (urlContexts.length) return { urlContexts }
+  }
+  return null
+}
+
 // Convert Gemini parts into thoughts/answer friendly chunks for the frontend.
 function emitContentParts({
   parts = [],
@@ -50,6 +72,7 @@ function emitContentParts({
   forceThoughts = false,
   forceAnswer = false,
   debugLog = false,
+  urlContextMetadata = null,
 }) {
   if (!socket || !parts.length) return
   const shapedParts = []
@@ -98,13 +121,18 @@ function emitContentParts({
 
   lastEmittedStep = step
 
-  socket.emit('chunk', {
+  // Only emit urlContextMetadata on FINAL
+  const chunkPayload = {
     chatId,
     requestId,
     step,
     parts: shapedParts,
     provider: 'gemini',
-  })
+  }
+  if (step === 'final' && urlContextMetadata) {
+    chunkPayload.urlContextMetadata = urlContextMetadata
+  }
+  socket.emit('chunk', chunkPayload)
   return { hasNonThought }
 }
 
@@ -203,17 +231,26 @@ async function streamOnce({
   groundingAcc,
   collectText = false,
   extractBlocks = [],
+  collectUrlContextMetadata = false,
 }) {
   const stream = await chat.sendMessageStream({ message, config })
   const functionCalls = []
   let hasAnswer = false
   let collectedText = ''
   let usageMetadata = null
+  let finalUrlContextMetadata = null
 
   for await (const chunk of stream) {
     const candidate = chunk?.candidates?.[0] || {}
     const parts = candidate.content?.parts || []
-
+    if (collectUrlContextMetadata) {
+      const meta = buildUrlContextMetadata(
+        candidate?.urlContextMetadata || candidate?.groundingMetadata || candidate?.grounding
+      )
+      if (meta) {
+        finalUrlContextMetadata = meta
+      }
+    }
     const shapeResult = emitContentParts({
       parts,
       socket,
@@ -223,6 +260,8 @@ async function streamOnce({
       forceThoughts,
       forceAnswer,
       debugLog,
+      // Only FINAL should surface urlContextMetadata to frontend
+      urlContextMetadata: step === 'final' ? candidate?.urlContextMetadata || null : null,
     })
     if (shapeResult?.hasNonThought) {
       hasAnswer = true
@@ -286,6 +325,7 @@ async function streamOnce({
     collectedText,
     structuredBlocks,
     usageMetadata,
+    urlContextMetadata: finalUrlContextMetadata,
   }
 }
 
@@ -312,7 +352,8 @@ function toUserContent(message) {
 }
 
 function extractUserText(message) {
-  if (typeof message === 'string') return message
+  const prefix = mandatoryFinalUrlInstruction
+  if (typeof message === 'string') return `${prefix}\n${message}`
   if (Array.isArray(message)) {
     const withRole = message.filter(
       (m) => m && typeof m === 'object' && typeof m.role === 'string'
@@ -320,20 +361,22 @@ function extractUserText(message) {
     const content = withRole.length ? withRole[withRole.length - 1] : null
     const parts = content?.parts
     if (Array.isArray(parts)) {
-      return parts
+      const base = parts
         .map((p) => (p?.text ? String(p.text) : ''))
         .filter(Boolean)
         .join('\n')
+      return base ? `${prefix}\n${base}` : prefix
     }
-    return ''
+    return prefix
   }
   if (message && typeof message === 'object' && Array.isArray(message.parts)) {
-    return message.parts
+    const base = message.parts
       .map((p) => (p?.text ? String(p.text) : ''))
       .filter(Boolean)
       .join('\n')
+    return base ? `${prefix}\n${base}` : prefix
   }
-  return ''
+  return prefix
 }
 
 function extractUserUrls(message) {
@@ -369,6 +412,31 @@ function buildThinkingConfig(parameters, includeThoughtsDefault = true) {
   const config = {}
   config.includeThoughts = includeThoughtsDefault
   return config
+}
+
+// Extract FINAL_URLS entries from RESEARCH_NOTES blocks
+function extractFinalUrlsFromNotes(stepNotes = []) {
+  const results = []
+  for (const note of stepNotes) {
+    if (!note || typeof note !== 'string') continue
+    if (!note.includes('<RESEARCH_NOTES>')) continue
+    const sectionMatch = note.match(/FINAL_URLS:\s*([\s\S]*?)(?:\n{2,}|<\/RESEARCH_NOTES>)/i)
+    if (!sectionMatch) continue
+    const lines = sectionMatch[1].split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('-')) continue
+      const m = trimmed.match(/-\s*(.+?)\s*\((https?:\/\/[^\s)]+)\)\s*(?:-\s*(.+))?/)
+      if (m) {
+        results.push({
+          title: m[1].trim(),
+          url: m[2].trim(),
+          authority: m[3]?.trim() || null,
+        })
+      }
+    }
+  }
+  return results
 }
 
 // Extract structured blocks from agent output (e.g., <PLAN_OUTPUT>, <RESEARCH_NOTES>)
@@ -920,6 +988,13 @@ export async function runAgentSession({
         maxSources: 10,
         maxQueries: 10,
       })
+      const finalUrls = extractFinalUrlsFromNotes(stepNotes)
+      console.log('[agent-runner] FINAL_URLS extracted:', finalUrls.length, finalUrls)
+      const finalUrlsSection = finalUrls.length
+        ? `=== FINAL_URLS (fetch with urlContext before answering) ===\n${finalUrls
+            .map((u, idx) => `[${idx + 1}] ${u.title} (${u.url})${u.authority ? ` - ${u.authority}` : ''}`)
+            .join('\n')}\n`
+        : '=== FINAL_URLS ===\nNone\n'
 
       // Filter out CONTROL_DECISION blocks for FINAL step (they are internal decision notes)
       const relevantNotes = stepNotes.filter(note => !note.includes('<CONTROL_DECISION>'))
@@ -991,6 +1066,8 @@ export async function runAgentSession({
         relevantNotes.length
           ? `${relevantNotes.join('\n\n---\n\n')}\n`
           : 'No PLAN or RESEARCH notes available.',
+        '',
+        finalUrlsSection,
         '',
         includeGroundingSummary && groundingSummary
           ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}\n`
@@ -1090,9 +1167,24 @@ export async function runAgentSession({
         requestId,
         step: 'final',
         debugLog: debugMode,
-        config: { tools: [], thinkingConfig: baseThinking },
+        collectUrlContextMetadata: true,
+        config: { tools: [{ urlContext: {} }], thinkingConfig: baseThinking },
       })
       tokenUsage.final = finalResult.usageMetadata
+      const finalUrlCalls =
+        Array.isArray(finalResult.functionCalls) && finalResult.functionCalls.length
+          ? finalResult.functionCalls.filter((c) => c?.name === 'urlContext')
+          : []
+      console.log('[agent-runner] FINAL function calls (urlContext only):', finalUrlCalls)
+      if (debugMode && finalResult.urlContextMetadata) {
+        console.debug('[agent-runner] FINAL urlContextMetadata collected:', JSON.stringify(finalResult.urlContextMetadata, null, 2))
+      }
+      if (finalUrls.length && !finalUrlCalls.length) {
+        console.warn('[agent-runner] FINAL expected urlContext calls for FINAL_URLS but none observed')
+      }
+      if (finalUrls.length && !finalResult.urlContextMetadata) {
+        console.warn('[agent-runner] FINAL urlContextMetadata missing despite FINAL_URLS being present')
+      }
 
       // Print total token usage summary with breakdown
       console.log('\n=== AGENT WORKFLOW TOKEN USAGE SUMMARY ===')
@@ -1142,17 +1234,12 @@ export async function runAgentSession({
       console.log(`  Thoughts (Reasoning):   ${totalThoughts.toLocaleString()} tokens (${((totalThoughts/grandTotal)*100).toFixed(1)}%)`)
       console.log('==========================================\n')
 
-      const groundingMetadata = buildGroundingMetadata(groundingAcc)
-      if (groundingMetadata) {
-        socket.emit('chunk', {
-          chatId,
-          requestId,
-          provider: 'gemini',
-          metadata: { grounding: groundingMetadata },
-        })
-      }
-
-      socket.emit('end_generation', { ok: true, chatId, requestId })
+      socket.emit('end_generation', {
+        ok: true,
+        chatId,
+        requestId,
+        urlContextMetadata: finalResult.urlContextMetadata || null,
+      })
       return
     }
 
