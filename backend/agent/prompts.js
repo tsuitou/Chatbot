@@ -30,6 +30,7 @@ export const commonAgentPolicies = [
   '- URLs: never output raw URLs; cite titles or numbered sources. See URL OUTPUT POLICY.',
   '- Tool fallback: if a tool fails, adjust the query, try an alternate source, and record the failure.',
   '- Examples use placeholders (X.Y.Z / YYYY-MM) to avoid stale data.',
+  '- Be aware your own internal knowledge may be outdated; rely on provided context and tool results with humility.',
 ].join('\n')
 
 export const agentAddendumClarify = [
@@ -90,6 +91,7 @@ export const agentAddendumPlan = [
   '- Treat CLARIFY_OUTPUT as real search results already executed, not simulated text.',
   '- Do NOT doubt or override CLARIFY unless you verify by running your own googleSearch/urlContext now in PLAN.',
   '- Use verified terminology from CLARIFY_OUTPUT without re-checking.',
+  '- Do NOT override or contradict CLARIFY or user-provided info; accept as correct unless re-verified with tools now.',
   '- If user gave URLs, call urlContext to inspect them.',
   '- Output only inside <PLAN_OUTPUT>...</PLAN_OUTPUT>.',
   '- Include sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, GLOSSARY, USER_URL_SUMMARY, UNKNOWN_FACTS, RESEARCH_PLAN.',
@@ -314,10 +316,62 @@ export const criticalAgentRules = [
   'Verification policy:',
   '- Prefer official sources and note freshness when time-sensitive.',
   '- When in doubt about currency, call tools; for stable knowledge, memory is acceptable.',
+  '- Recognize that your own training data may be outdated; defer to provided context and tool results.',
+  '- Respect findings from prior steps; do not override them without immediate tool-based verification.',
+  '- Treat the provided current date in prompts as authoritative when judging freshness or "latest" claims.',
   '',
   'Research principles:',
   '- Plan, search, gather URLs, extract facts, then synthesize.',
   '- Track dates/versions; avoid outdated info; favor official sources.',
   '- Think aloud in internal steps; present clearly in FINAL.',
   '---',
+].join('\n')
+
+// Short per-turn injection prompts (use at step entry to reduce forgetfulness)
+export const clarifyTurnPrompt = [
+  'Thinking Process:<AGENT>',
+  '<CLARIFY_OUTPUT>...</CLARIFY_OUTPUT> only. No text outside.',
+  'Call googleSearch at least once.',
+  'Scope: verify names/versions/status of all terms. No user answers or plans.',
+  'Sections: VERIFIED_TERMS, CORRECTIONS, SEARCH_SUMMARY, NOTES. Fill all.',
+  'If unsure: output only required sections inside tags; outside text = invalid.',
+].join('\n')
+
+export const planTurnPrompt = [
+  'Thinking Process:<AGENT>',
+  '<PLAN_OUTPUT>...</PLAN_OUTPUT> only. No text outside.',
+  'Trust CLARIFY_OUTPUT (real searches, correct as of that step). If doubting, verify now with googleSearch/urlContext.',
+  'Scope: infer context, list UNKNOWN_FACTS, design research objectives (not queries).',
+  'Stage 1 objectives = prerequisite freshness/compat info; Stage 2 objectives = final answer info.',
+  'Sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, GLOSSARY, USER_URL_SUMMARY, UNKNOWN_FACTS, RESEARCH_PLAN.',
+  'If no freshness risk: mark "Subqueries: none".',
+  'Your own background may be stale; be humble and lean on CLARIFY_OUTPUT and sources provided.',
+  'Do NOT override or doubt provided notes; accept them unless you immediately re-verify with tools in this step.',
+].join('\n')
+
+export const researchTurnPrompt = [
+  'Thinking Process:<AGENT>',
+  '<RESEARCH_NOTES>...</RESEARCH_NOTES> only. No text outside.',
+  'Follow PLAN objectives in two stages: Stage 1 subqueries (prerequisite info), Stage 2 main queries (user answer).',
+  'If PLAN has subqueries: run ≥1 subquery and ≥1 main query. If none: run ≥1 main query.',
+  'Craft precise queries here; handle retries/pivots here (not in PLAN).',
+  'For APIs/libraries/tech specs/math/science/standards: fetch source pages with urlContext and extract from page content.',
+  'Sections: QUERIES_EXECUTED, ENTITY_DETAILS, SOURCES_ACCESSED, TECHNICAL_DETAILS, FACTS_EXTRACTED, UNCERTAINTIES.',
+].join('\n')
+
+export const controlTurnPrompt = [
+  'Thinking Process:<AGENT>',
+  '<CONTROL_DECISION>...</CONTROL_DECISION> only. No text outside.',
+  'Compare UNKNOWN_FACTS vs FACTS_EXTRACTED; judge coverage/quality/confidence.',
+  'If PLAN subqueries unfinished → prefer action=research.',
+  'Include: SCORING_CALCULATION, OVERRIDE_CHECK, COVERAGE_ANALYSIS, QUALITY_ANALYSIS, CONFIDENCE_ANALYSIS, DECISION (+ NEXT_RESEARCH_TARGETS if research).',
+  'Call control_step exactly once with action and reasoning.',
+].join('\n')
+
+export const finalTurnPrompt = [
+  'User-facing answer only (no <AGENT>, no internal tags).',
+  'Use findings from RESEARCH/CONTROL; cite sources by title/number, not URLs.',
+  'Deliver a comprehensive, well-structured report-level answer (not a brief summary).',
+  'Validate all technical facts against PLAN/RESEARCH notes; if evidence is missing or conflicting, flag the gap instead of asserting.',
+  'Avoid contradictions: align versions/dates/features with prior steps; do not invent unstated details.',
 ].join('\n')

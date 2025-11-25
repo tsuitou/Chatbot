@@ -5,8 +5,13 @@ import {
   agentAddendumPlan,
   agentAddendumResearch,
   agentPersonaInstruction,
+  clarifyTurnPrompt,
+  controlTurnPrompt,
   criticalAgentRules,
+  finalTurnPrompt,
   flowInstruction,
+  planTurnPrompt,
+  researchTurnPrompt,
   searchPolicyInstruction,
 } from './prompts.js'
 
@@ -449,7 +454,7 @@ export async function runAgentSession({
   }
 
   // Get current date for context
-  const currentDate = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+  const currentDate = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in local time
 
   // --- PRE-CHECK: Determine if agent workflow is needed ---
   const precheckChat = ai.chats.create({
@@ -592,18 +597,10 @@ export async function runAgentSession({
     'Use this date to determine what "latest" or "current" means.',
     'Search results should be evaluated based on this date.',
     '',
-    '=== CRITICAL: UNDERSTAND YOUR ROLE ===',
-    'This is a LIGHTWEIGHT terminology verification step.',
-    'The user will NEVER see this output.',
-    'Your output is a concise glossary for the PLAN step to use.',
-    'Do NOT create research plans or analyze requirements.',
-    '',
-    '=== MANDATORY: Output <AGENT> tag first ===',
-    'Start your thoughts with: <AGENT>',
-    'Start your response text with: <AGENT>',
-    '',
     '=== USER REQUEST ===',
     extractUserText(contents),
+    '',
+    clarifyTurnPrompt,
     '',
     agentAddendumClarify,
     '',
@@ -646,16 +643,16 @@ export async function runAgentSession({
     }
   }
 
-  // Format grounding summary from CLARIFY for PLAN
-  const clarifyGroundingSummary = formatGroundingSummary(groundingAcc, {
-    maxSources: 20,
-    maxQueries: 20,
-  })
+  const includeGroundingSummary = process.env.AGENT_INCLUDE_GROUNDING === 'true'
+  // Format grounding summary from CLARIFY for PLAN (only if enabled)
+  const clarifyGroundingSummary = includeGroundingSummary
+    ? formatGroundingSummary(groundingAcc, { maxSources: 20, maxQueries: 20 })
+    : null
 
   // --- Plan stage (always once) ---
-  // planChat: finalModel (user-selected) for high-quality planning, inherits history from clarifyChat
+  // planChat: baseModel for fast planning, inherits history from clarifyChat
   const planChat = ai.chats.create({
-    model: finalModel,
+    model: baseModel,
     config: {
       systemInstruction: buildSystemInstruction('agent'),
       thinkingConfig: baseThinking,
@@ -668,29 +665,15 @@ export async function runAgentSession({
     `=== CURRENT DATE ===`,
     `Today's date: ${currentDate}`,
     '',
-    '=== CRITICAL: UNDERSTAND YOUR ROLE ===',
-    'This is an INTERNAL processing step. The user will NEVER see this output.',
-    'Your output is a structured note for the RESEARCH step to read.',
-    'Do NOT write user-facing answers or explanations.',
-    '',
-    '=== MANDATORY: Output <AGENT> tag first ===',
-    'Start your thoughts with: <AGENT>',
-    'Start your response text with: <AGENT>',
-    '',
     stepNotes.length
       ? `=== CLARIFY_OUTPUT (from previous step) ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
       : '=== NO CLARIFY_OUTPUT ===\nNo terminology verification available.',
     '',
-    clarifyGroundingSummary
+    includeGroundingSummary && clarifyGroundingSummary
       ? `=== SOURCES FOUND IN CLARIFY STEP ===\nThe CLARIFY step already searched and found these sources.\nThese are VERIFIED and TRUSTWORTHY - do not doubt them:\n\n${clarifyGroundingSummary}\n`
       : '',
     '',
-    '=== USER REQUEST ===',
-    extractUserText(contents),
-    '',
-    userUrls.length
-      ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
-      : null,
+    planTurnPrompt,
     '',
     agentAddendumPlan,
     '',
@@ -748,10 +731,9 @@ export async function runAgentSession({
   let lastControlTargets = null // Store NEXT_RESEARCH_TARGETS from previous CONTROL step
 
   const runResearch = async (idx) => {
-    const researchGroundingSummary = formatGroundingSummary(groundingAcc, {
-      maxSources: 10,
-      maxQueries: 10,
-    })
+    const researchGroundingSummary = includeGroundingSummary
+      ? formatGroundingSummary(groundingAcc, { maxSources: 10, maxQueries: 10 })
+      : null
 
     const researchPrompt = [
       'STEP=RESEARCH',
@@ -759,18 +741,6 @@ export async function runAgentSession({
       `=== CURRENT DATE ===`,
       `Today's date: ${currentDate}`,
       'Evaluate information freshness based on this date.',
-      '',
-      '=== CRITICAL: UNDERSTAND YOUR ROLE ===',
-      'This is an INTERNAL processing step. The user will NEVER see this output.',
-      'Your output is a structured research report for CONTROL and FINAL steps to read.',
-      'Do NOT write user-facing answers or explanations.',
-      '',
-      '=== MANDATORY: Output <AGENT> tag first ===',
-      'Start your thoughts with: <AGENT>',
-      'Start your response text with: <AGENT>',
-      '',
-      '=== CRITICAL: You MUST call googleSearch and/or urlContext ===',
-      'This step requires tool usage. Do NOT output only text without calling tools.',
       '',
       lastControlTargets
         ? `=== PRIORITY TARGETS FROM CONTROL STEP ===\nThe CONTROL step identified these specific gaps to address:\n\n${lastControlTargets}\n\nFocus on these targets FIRST, then address any remaining items from PLAN_OUTPUT.\n`
@@ -780,13 +750,15 @@ export async function runAgentSession({
         ? `=== PLAN_OUTPUT AND PREVIOUS RESEARCH ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
         : '=== NO PLAN_OUTPUT ===\nNo plan available. Determine what to research based on user request.',
       '',
-      researchGroundingSummary
+      includeGroundingSummary && researchGroundingSummary
         ? `=== SOURCES/QUERIES GATHERED SO FAR ===\n${researchGroundingSummary}\n`
-        : '=== NO SOURCES YET ===\nNo sources gathered yet. Start researching now.',
+        : '',
       '',
       userUrls.length
         ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
         : null,
+      '',
+      researchTurnPrompt,
       '',
       agentAddendumResearch,
       '',
@@ -841,29 +813,19 @@ export async function runAgentSession({
     const controlPrompt = [
       'STEP=CONTROL',
       '',
-      '=== CRITICAL: UNDERSTAND YOUR ROLE ===',
-      'This is an INTERNAL processing step. The user will NEVER see this output.',
-      'Your role is to decide whether to continue research or proceed to final answer.',
-      'Do NOT write user-facing answers or explanations.',
-      '',
-      '=== MANDATORY: Output <AGENT> tag first ===',
-      'Start your thoughts with: <AGENT>',
-      'Start your response text with: <AGENT>',
-      '',
-      '=== CRITICAL: You MUST call control_step function ===',
-      'After brief analysis, immediately call control_step with action=research or action=final.',
-      '',
       stepNotes.length
         ? `=== ALL NOTES SO FAR ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
         : '=== NO NOTES ===\nNo previous notes available.',
       '',
-      groundingSummaryLoop
+      includeGroundingSummary && groundingSummaryLoop
         ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummaryLoop}\n`
-        : '=== NO SOURCES YET ===\nNo sources gathered yet.',
+        : '',
       '',
       userUrls.length
         ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
         : null,
+      '',
+      controlTurnPrompt,
       '',
       agentAddendumControl,
       '',
@@ -1030,13 +992,15 @@ export async function runAgentSession({
           ? `${relevantNotes.join('\n\n---\n\n')}\n`
           : 'No PLAN or RESEARCH notes available.',
         '',
-        groundingSummary
+        includeGroundingSummary && groundingSummary
           ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}\n`
           : '',
         '',
         userUrls.length
           ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
           : '',
+        '',
+        finalTurnPrompt,
         '',
         '=== ORIGINAL USER REQUEST ===',
         extractUserText(contents) || '(No user request text available)',
