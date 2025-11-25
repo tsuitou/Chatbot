@@ -1,7 +1,7 @@
 # Agent Workflow Overview
 
 ## Pipeline
-- **PRE_CHECK** (finalModel`): Decides whether to run the agent.
+- **PRE_CHECK** (finalModel): Decides whether to run the agent.
 - **CLARIFY** (baseModel): Terminology/version verification. Must use tools; outputs `<CLARIFY_OUTPUT>`.
 - **PLAN** (baseModel): Trusts CLARIFY, defines unknowns and research objectives (Stage 1 prerequisites → Stage 2 main). No tool calls expected. Outputs `<PLAN_OUTPUT>`.
 - **RESEARCH** (baseModel, loop): Executes Stage 1 subqueries then Stage 2 main queries, must call tools (googleSearch/urlContext). Outputs `<RESEARCH_NOTES>`.
@@ -44,6 +44,6 @@
 - `backend/agent/prompts.js`: Common policies, critical rules, and turn-specific prompt snippets.
 
 ## Minimal Setup
-- Ensure `.env` (or environment) provides model names for `baseModel` / `finalModel` (e.g., `AGENT_BASE_MODEL=gemini-2.5-flash`).
+- Ensure `.env` (or environment) provides model name for `baseModel` (e.g., `AGENT_BASE_MODEL=gemini-2.5-flash`).
 - Optional: `AGENT_INCLUDE_GROUNDING=true` to inject summaries of gathered sources/queries (default false).
 - Optional: `AGENT_DEBUG=true` to emit debug logs from the runner.
