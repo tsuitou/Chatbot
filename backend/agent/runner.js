@@ -989,7 +989,9 @@ export async function runAgentSession({
         maxQueries: 10,
       })
       const finalUrls = extractFinalUrlsFromNotes(stepNotes)
-      console.log('[agent-runner] FINAL_URLS extracted:', finalUrls.length, finalUrls)
+      if (debugMode) {
+        console.log('[agent-runner] FINAL_URLS extracted:', finalUrls.length, finalUrls)
+      }
       const finalUrlsSection = finalUrls.length
         ? `=== FINAL_URLS (fetch with urlContext before answering) ===\n${finalUrls
             .map((u, idx) => `[${idx + 1}] ${u.title} (${u.url})${u.authority ? ` - ${u.authority}` : ''}`)
@@ -1175,7 +1177,9 @@ export async function runAgentSession({
         Array.isArray(finalResult.functionCalls) && finalResult.functionCalls.length
           ? finalResult.functionCalls.filter((c) => c?.name === 'urlContext')
           : []
-      console.log('[agent-runner] FINAL function calls (urlContext only):', finalUrlCalls)
+      if (debugMode) {
+        console.log('[agent-runner] FINAL function calls (urlContext only):', finalUrlCalls)
+      }
       if (debugMode && finalResult.urlContextMetadata) {
         console.debug('[agent-runner] FINAL urlContextMetadata collected:', JSON.stringify(finalResult.urlContextMetadata, null, 2))
       }
@@ -1187,52 +1191,54 @@ export async function runAgentSession({
       }
 
       // Print total token usage summary with breakdown
-      console.log('\n=== AGENT WORKFLOW TOKEN USAGE SUMMARY ===')
+      if (debugMode) {
+        console.log('\n=== AGENT WORKFLOW TOKEN USAGE SUMMARY ===')
 
-      const sumTokens = (metadata) => metadata ? (metadata.totalTokenCount || 0) : 0
-      const sumPrompt = (metadata) => metadata ? (metadata.promptTokenCount || 0) : 0
-      const sumToolPrompt = (metadata) => metadata ? (metadata.toolUsePromptTokenCount || 0) : 0
-      const sumOutput = (metadata) => metadata ? (metadata.candidatesTokenCount || 0) : 0
-      const sumThoughts = (metadata) => metadata ? (metadata.thoughtsTokenCount || 0) : 0
+        const sumTokens = (metadata) => metadata ? (metadata.totalTokenCount || 0) : 0
+        const sumPrompt = (metadata) => metadata ? (metadata.promptTokenCount || 0) : 0
+        const sumToolPrompt = (metadata) => metadata ? (metadata.toolUsePromptTokenCount || 0) : 0
+        const sumOutput = (metadata) => metadata ? (metadata.candidatesTokenCount || 0) : 0
+        const sumThoughts = (metadata) => metadata ? (metadata.thoughtsTokenCount || 0) : 0
 
-      const precheckTotal = sumTokens(tokenUsage.precheck)
-      const clarifyTotal = sumTokens(tokenUsage.clarify)
-      const planTotal = sumTokens(tokenUsage.plan)
-      const researchTotal = tokenUsage.research.reduce((sum, m) => sum + sumTokens(m), 0)
-      const controlTotal = tokenUsage.control.reduce((sum, m) => sum + sumTokens(m), 0)
-      const finalTotal = sumTokens(tokenUsage.final)
-      const grandTotal = precheckTotal + clarifyTotal + planTotal + researchTotal + controlTotal + finalTotal
+        const precheckTotal = sumTokens(tokenUsage.precheck)
+        const clarifyTotal = sumTokens(tokenUsage.clarify)
+        const planTotal = sumTokens(tokenUsage.plan)
+        const researchTotal = tokenUsage.research.reduce((sum, m) => sum + sumTokens(m), 0)
+        const controlTotal = tokenUsage.control.reduce((sum, m) => sum + sumTokens(m), 0)
+        const finalTotal = sumTokens(tokenUsage.final)
+        const grandTotal = precheckTotal + clarifyTotal + planTotal + researchTotal + controlTotal + finalTotal
 
-      // Calculate breakdown totals
-      const allMetadata = [
-        tokenUsage.precheck,
-        tokenUsage.clarify,
-        tokenUsage.plan,
-        ...tokenUsage.research,
-        ...tokenUsage.control,
-        tokenUsage.final,
-      ].filter(Boolean)
+        // Calculate breakdown totals
+        const allMetadata = [
+          tokenUsage.precheck,
+          tokenUsage.clarify,
+          tokenUsage.plan,
+          ...tokenUsage.research,
+          ...tokenUsage.control,
+          tokenUsage.final,
+        ].filter(Boolean)
 
-      const totalPrompt = allMetadata.reduce((sum, m) => sum + sumPrompt(m), 0)
-      const totalToolPrompt = allMetadata.reduce((sum, m) => sum + sumToolPrompt(m), 0)
-      const totalOutput = allMetadata.reduce((sum, m) => sum + sumOutput(m), 0)
-      const totalThoughts = allMetadata.reduce((sum, m) => sum + sumThoughts(m), 0)
+        const totalPrompt = allMetadata.reduce((sum, m) => sum + sumPrompt(m), 0)
+        const totalToolPrompt = allMetadata.reduce((sum, m) => sum + sumToolPrompt(m), 0)
+        const totalOutput = allMetadata.reduce((sum, m) => sum + sumOutput(m), 0)
+        const totalThoughts = allMetadata.reduce((sum, m) => sum + sumThoughts(m), 0)
 
-      console.log(`PRE_CHECK:  ${precheckTotal.toLocaleString()} tokens`)
-      console.log(`CLARIFY:    ${clarifyTotal.toLocaleString()} tokens`)
-      console.log(`PLAN:       ${planTotal.toLocaleString()} tokens`)
-      console.log(`RESEARCH:   ${researchTotal.toLocaleString()} tokens (${tokenUsage.research.length} cycles)`)
-      console.log(`CONTROL:    ${controlTotal.toLocaleString()} tokens (${tokenUsage.control.length} cycles)`)
-      console.log(`FINAL:      ${finalTotal.toLocaleString()} tokens`)
-      console.log(`───────────────────────────────────────`)
-      console.log(`TOTAL:      ${grandTotal.toLocaleString()} tokens`)
-      console.log(``)
-      console.log(`BREAKDOWN:`)
-      console.log(`  User Input + System:    ${totalPrompt.toLocaleString()} tokens (${((totalPrompt/grandTotal)*100).toFixed(1)}%)`)
-      console.log(`  Tool Declarations:      ${totalToolPrompt.toLocaleString()} tokens (${((totalToolPrompt/grandTotal)*100).toFixed(1)}%)`)
-      console.log(`  Model Output:           ${totalOutput.toLocaleString()} tokens (${((totalOutput/grandTotal)*100).toFixed(1)}%)`)
-      console.log(`  Thoughts (Reasoning):   ${totalThoughts.toLocaleString()} tokens (${((totalThoughts/grandTotal)*100).toFixed(1)}%)`)
-      console.log('==========================================\n')
+        console.log(`PRE_CHECK:  ${precheckTotal.toLocaleString()} tokens`)
+        console.log(`CLARIFY:    ${clarifyTotal.toLocaleString()} tokens`)
+        console.log(`PLAN:       ${planTotal.toLocaleString()} tokens`)
+        console.log(`RESEARCH:   ${researchTotal.toLocaleString()} tokens (${tokenUsage.research.length} cycles)`)
+        console.log(`CONTROL:    ${controlTotal.toLocaleString()} tokens (${tokenUsage.control.length} cycles)`)
+        console.log(`FINAL:      ${finalTotal.toLocaleString()} tokens`)
+        console.log(`───────────────────────────────────────`)
+        console.log(`TOTAL:      ${grandTotal.toLocaleString()} tokens`)
+        console.log(``)
+        console.log(`BREAKDOWN:`)
+        console.log(`  User Input + System:    ${totalPrompt.toLocaleString()} tokens (${((totalPrompt/grandTotal)*100).toFixed(1)}%)`)
+        console.log(`  Tool Declarations:      ${totalToolPrompt.toLocaleString()} tokens (${((totalToolPrompt/grandTotal)*100).toFixed(1)}%)`)
+        console.log(`  Model Output:           ${totalOutput.toLocaleString()} tokens (${((totalOutput/grandTotal)*100).toFixed(1)}%)`)
+        console.log(`  Thoughts (Reasoning):   ${totalThoughts.toLocaleString()} tokens (${((totalThoughts/grandTotal)*100).toFixed(1)}%)`)
+        console.log('==========================================\n')
+      }
 
       socket.emit('end_generation', {
         ok: true,
