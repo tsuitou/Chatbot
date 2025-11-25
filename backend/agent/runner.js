@@ -1,4 +1,14 @@
 import { GoogleGenAI } from '@google/genai'
+import {
+  agentAddendumClarify,
+  agentAddendumControl,
+  agentAddendumPlan,
+  agentAddendumResearch,
+  agentPersonaInstruction,
+  criticalAgentRules,
+  flowInstruction,
+  searchPolicyInstruction,
+} from './prompts.js'
 
 // Extract control_step action from function calls (handles both object and JSON string args).
 function extractStepAction(functionCalls) {
@@ -193,10 +203,12 @@ async function streamOnce({
   const functionCalls = []
   let hasAnswer = false
   let collectedText = ''
+  let usageMetadata = null
 
   for await (const chunk of stream) {
     const candidate = chunk?.candidates?.[0] || {}
     const parts = candidate.content?.parts || []
+
     const shapeResult = emitContentParts({
       parts,
       socket,
@@ -227,10 +239,29 @@ async function streamOnce({
       }
     }
 
+    // Check for function calls in parts (new API format)
+    for (const part of parts) {
+      if (part?.functionCall) {
+        functionCalls.push(part.functionCall)
+      }
+    }
+
+    // Also check candidate.functionCalls (old API format)
     const calls = candidate.functionCalls || []
     if (Array.isArray(calls) && calls.length) {
       functionCalls.push(...calls)
     }
+
+    // Capture usage metadata from chunk
+    if (chunk?.usageMetadata) {
+      usageMetadata = chunk.usageMetadata
+    }
+  }
+
+  // Log token usage if available
+  if (usageMetadata) {
+    const { promptTokenCount, candidatesTokenCount, totalTokenCount, thoughtsTokenCount, toolUsePromptTokenCount } = usageMetadata
+    console.log(`[agent-runner] ${step.toUpperCase()} tokens: prompt=${promptTokenCount || 0}, tool=${toolUsePromptTokenCount || 0}, output=${candidatesTokenCount || 0}, thoughts=${thoughtsTokenCount || 0}, total=${totalTokenCount || 0}`)
   }
 
   // Extract structured blocks if requested
@@ -249,6 +280,7 @@ async function streamOnce({
     hasAnswer,
     collectedText,
     structuredBlocks,
+    usageMetadata,
   }
 }
 
@@ -375,703 +407,6 @@ export async function runAgentSession({
   // Debug mode controlled by environment variable
   const debugMode = process.env.AGENT_DEBUG === 'true'
 
-  const agentPersonaInstruction = [
-    'You are an autonomous research and response generation agent operating via the Gemini API.',
-    'In normal operation, you respond to a user\'s single prompt in one turn. However, during agent operation, due to tool usage constraints, the conversation consists of multiple responses to the user\'s prompt, connected by auto-generated prompts.',
-    'TRUST POLICY:',
-    '- Treat the user prompt and gathered evidence as the primary truth. Doubt your own prior knowledge.',
-    '- Whenever a fact might be outdated or unclear, VERIFY with googleSearch/urlContext before trusting it.',
-    '- Prefer official/primary sources over memory; explicitly note freshness and dates.',
-    'RESEARCH PRINCIPLES:',
-    'You proactively run multi-step investigation: decide whether to search, gather URLs, extract facts, and then synthesize.',
-    'You always keep track of source freshness (dates/versions) and avoid outdated information.',
-    'You prioritize official documentation and official sources over third-party information.',
-    'You think aloud (includeThoughts) while researching, then deliver a well-structured final answer with sources.',
-  ].join('\n')
-
-  const flowInstruction = [
-    '=== AGENT WORKFLOW ===',
-    '',
-    'You operate in 5 steps within a single chat session:',
-    '1. CLARIFY: Verify current names and versions of all mentioned technologies',
-    '2. PLAN: Identify unknowns, check user URLs, create research plan',
-    '3. RESEARCH: Execute research plan with tools, document findings',
-    '4. CONTROL: Decide if research is complete or needs continuation',
-    '5. FINAL: Synthesize all findings into user-facing answer',
-    '',
-    'Context continuity:',
-    '- Each step receives structured notes from previous steps',
-    '- CLARIFY creates verified terminology glossary for PLAN',
-    '- PLAN creates research strategy for RESEARCH',
-    '- RESEARCH creates factual notes for CONTROL and FINAL',
-    '- CONTROL decides whether to loop back to RESEARCH or proceed to FINAL',
-    '- All tool outputs remain in chat history via Thought Signature',
-    '',
-    'Step-specific prompts you receive are operational instructions to guide that step.',
-    'The original user question remains constant throughout all steps.',
-    'Never write user-facing answers in CLARIFY/PLAN/RESEARCH/CONTROL - those are internal notes only.',
-    'All comprehensive answers must wait for the FINAL step.',
-  ].join('\n')
-
-  const urlOutputPolicy = [
-    '=== URL OUTPUT POLICY ===',
-    'You have access to source URLs and search results in context.',
-    'DO NOT output any URLs in your response text.',
-    'Refer to sources by title or number only (e.g., "Official Documentation", "Source [1]").',
-    'URLs are for your internal reference, not for output.',
-  ].join('\n')
-
-  const agentAddendumClarify = [
-    '=== CLARIFY STEP: VERIFY CURRENT TERMINOLOGY ===',
-    '',
-    'Your role in this step:',
-    '1. Extract ALL technology/library/API/tool names mentioned in user request',
-    '2. For EACH name, verify the current official name and latest version',
-    '3. Use googleSearch to confirm current state (NOT your training data)',
-    '4. Output a concise glossary of verified terms',
-    '',
-    'CRITICAL: This step is ONLY about terminology verification.',
-    'Do NOT plan research strategy. Do NOT analyze implementation details.',
-    'Just verify: "What is this called now? What\'s the latest version?"',
-    '',
-    urlOutputPolicy,
-    '',
-    '=== EXTRACTION: IDENTIFY ALL TERMS ===',
-    '',
-    'Extract from user request:',
-    '- Programming languages (e.g., "Python", "JavaScript", "Node.js")',
-    '- Frameworks/Libraries (e.g., "React", "Next.js", "Express")',
-    '- APIs/Services (e.g., "Gemini API", "OpenAI API")',
-    '- Tools/Platforms (e.g., "npm", "Docker", "Vercel")',
-    '- Models (e.g., "GPT-4", "Gemini 2.0")',
-    '- Any proper noun that might have versions or alternatives',
-    '',
-    '=== VERIFICATION: CHECK EACH TERM ===',
-    '',
-    'For EACH extracted term, use googleSearch to verify:',
-    '',
-    '1. Official current name',
-    '   - Search: "[term] official name" or "[term] current version"',
-    '   - Check if it\'s been renamed, deprecated, or replaced',
-    '   - Example: "Nano Banana" might actually be "Gemini SDK"',
-    '',
-    '2. Latest stable version',
-    '   - Search: "[verified name] latest version" or "[verified name] current stable"',
-    '   - Get the actual version number and release date',
-    '   - Example: "React latest version" → "React 19.0.0 (December 2024)"',
-    '',
-    '3. Quick reality check',
-    '   - Does this technology actually exist?',
-    '   - Is it still actively maintained?',
-    '   - Any major breaking changes recently?',
-    '',
-    'Search strategy:',
-    '- Keep queries simple and direct',
-    '- Prioritize official sources (official sites, GitHub releases, npm registry)',
-    '- If not found, try alternative spellings or search for "what is [term]"',
-    '',
-    '=== OUTPUT FORMAT (MANDATORY - USE STRUCTURED TAGS) ===',
-    '',
-    'ALL your response text MUST be enclosed in <CLARIFY_OUTPUT></CLARIFY_OUTPUT> tags.',
-    'NO text should appear outside these tags.',
-    '',
-    'Required structure:',
-    '',
-    '<CLARIFY_OUTPUT>',
-    'VERIFIED_TERMS:',
-    '- [Original term from user]: [Official current name]',
-    '  Latest version: [X.Y.Z (release date)]',
-    '  Status: [active / deprecated / replaced by X]',
-    '  Official source: [e.g., "Official docs", "npm registry", "GitHub releases"]',
-    '  Search query used: "[the exact query you used]"',
-    '  Key findings from search: [1-2 sentences summarizing what the search revealed]',
-    '',
-    '(Repeat for each term extracted)',
-    '',
-    'CORRECTIONS:',
-    '- [If user term was incorrect]: [Original] → [Corrected name]',
-    '  Reason: [e.g., "Typo", "Old name", "Alias"]',
-    '  How discovered: [What search revealed this correction]',
-    '',
-    '(Only include if corrections were needed, otherwise write "None")',
-    '',
-    'SEARCH_SUMMARY:',
-    '- Total searches performed: [count]',
-    '- All queries executed: "[query 1]", "[query 2]", ...',
-    '- All sources found: [list source titles - not URLs, just titles]',
-    '',
-    'NOTES:',
-    '- [Any important observations about terminology or versions]',
-    '- [Any deprecations or major changes to be aware of]',
-    '',
-    '(Brief notes only - 1-3 items maximum)',
-    '</CLARIFY_OUTPUT>',
-    '',
-    '=== CRITICAL REMINDERS ===',
-    '- This is a LIGHTWEIGHT step - keep it fast and focused',
-    '- Do NOT create research plans here - that\'s PLAN step\'s job',
-    '- Do NOT fetch detailed documentation - just verify names and versions',
-    '- Do NOT analyze user requirements - just verify terminology',
-    '- Use googleSearch ONLY for terminology verification',
-    '- Output goes to PLAN step, not to user',
-    '',
-    '=== EXAMPLE ===',
-    '',
-    'User request: "How to use Nano Banana with Nxt.js 15?"',
-    '',
-    'Your searches:',
-    '1. "Nano Banana official name" → discover it\'s actually "Google Generative AI SDK"',
-    '2. "Google Generative AI SDK latest version" → "v0.21.0 (Jan 2025)"',
-    '3. "Nxt.js" → no results → try "Next.js" → "Next.js 15.1.0 (Dec 2024)"',
-    '',
-    'Your output:',
-    '<CLARIFY_OUTPUT>',
-    'VERIFIED_TERMS:',
-    '- Nano Banana: Google Generative AI SDK (@google/generative-ai)',
-    '  Latest version: 0.21.0 (January 2025)',
-    '  Status: active',
-    '  Official source: npm registry, Google AI docs',
-    '  Search query used: "Nano Banana official name"',
-    '  Key findings from search: Found npm package @google/generative-ai, commonly referred to by various informal names. Official documentation shows v0.21.0 as latest.',
-    '',
-    '- Nxt.js: Next.js',
-    '  Latest version: 15.1.0 (December 2024)',
-    '  Status: active',
-    '  Official source: Next.js official site',
-    '  Search query used: "Next.js latest version"',
-    '  Key findings from search: Next.js 15.1.0 released Dec 2024, major updates to App Router and Server Components.',
-    '',
-    'CORRECTIONS:',
-    '- Nano Banana → Google Generative AI SDK (user used informal/internal name)',
-    '  How discovered: Search for "Nano Banana" yielded no results, broadened to find Google\'s generative AI SDK',
-    '- Nxt.js → Next.js (typo)',
-    '  How discovered: No results for "Nxt.js", corrected spelling found Next.js',
-    '',
-    'SEARCH_SUMMARY:',
-    '- Total searches performed: 4',
-    '- All queries executed: "Nano Banana official name", "Google Generative AI SDK latest version", "Next.js latest version", "Nxt.js"',
-    '- All sources found: npm registry page, Google AI documentation, Next.js official release notes',
-    '',
-    'NOTES:',
-    '- Next.js 15 is the latest major version with significant changes',
-    '- Google Generative AI SDK has frequent updates, version checked Jan 2025',
-    '</CLARIFY_OUTPUT>',
-  ].join('\n')
-
-  const agentAddendumPlan = [
-    '=== PLAN STEP: IDENTIFY WHAT IS UNKNOWN ===',
-    '',
-    'Your role in this step:',
-    '1. Review CLARIFY_OUTPUT to understand verified terminology and versions',
-    '2. Check user-provided URLs if any (MANDATORY)',
-    '3. Identify what facts are still UNKNOWN after terminology verification',
-    '4. Create a detailed research plan for the RESEARCH step',
-    '',
-    'IMPORTANT: The CLARIFY step has already verified all technology names and versions.',
-    'Use that verified information. Do NOT re-verify terminology.',
-    'Focus on understanding WHAT the user wants to do with those technologies.',
-    '',
-    urlOutputPolicy,
-    '',
-    '=== PHASE 1: REVIEW CLARIFY_OUTPUT ===',
-    '',
-    'The CLARIFY step has already verified all technology names and their current versions.',
-    'Review CLARIFY_OUTPUT to understand:',
-    '- Verified official names (if user used informal names or typos)',
-    '- Current stable versions with release dates',
-    '- Any deprecations or replacements',
-    '- Corrections made to user terminology',
-    '',
-    'Use this verified information as the foundation for your research plan.',
-    'Do NOT re-search for technology names or versions already verified in CLARIFY_OUTPUT.',
-    '',
-    '=== PHASE 1.5: VERSION HANDLING ===',
-    '',
-    'CLARIFY_OUTPUT provides the latest versions.',
-    'If user explicitly specified a different version:',
-    '- Honor their specified version',
-    '- Note the difference between their version and latest',
-    '- Plan research for their specific version',
-    '',
-    'If user did NOT specify a version:',
-    '- Use the latest version from CLARIFY_OUTPUT',
-    '- Document this assumption in CONTEXT_INFERENCE',
-    '',
-    '=== PHASE 2: USER URL INSPECTION ===',
-    '',
-    'If user provided URLs in their request:',
-    '- Use urlContext tool to access EACH URL',
-    '- Document what each URL is about (page title, main topic, key info)',
-    '- Note any access failures (403 Forbidden, 404 Not Found, timeout, etc.)',
-    '- Failed URLs should be handled in RESEARCH step via alternative searches',
-    '',
-    'Example USER_URL_SUMMARY:',
-    '- Source [1]: Official API reference for Gemini 2.0 - describes model parameters',
-    '- Source [2]: Failed to fetch (403 Forbidden) - will search for alternative source',
-    '',
-    '=== PHASE 3: CONTEXT INFERENCE ===',
-    '',
-    'Objective: Infer implicit technical context from the user request to enhance search quality.',
-    '',
-    'Platform/Language inference (when not explicitly stated):',
-    '- Mentions "npm", "package.json", "import" → likely Node.js/JavaScript',
-    '- Mentions "pip", "__init__.py" → likely Python',
-    '- Mentions "cargo", "Cargo.toml" → likely Rust',
-    '- Mentions "gem", "Gemfile" → likely Ruby',
-    '',
-    'Version inference for common platforms:',
-    '- "Node.js" without version → search for current LTS version',
-    '- "Python" without version → assume Python 3.x, search for latest',
-    '- "React" without version → search for current stable',
-    '',
-    'Search query enhancement strategy:',
-    '- BAD (too vague): "library X usage"',
-    '- GOOD (with context): "library X Node.js v22 usage example"',
-    '- BAD (no platform): "image generation API"',
-    '- GOOD (with platform): "Gemini API Node.js image generation example"',
-    '',
-    'Document in CONTEXT_INFERENCE:',
-    '- Platform/Language: [inferred platform with version if determined]',
-    '- Target Goal: [what user wants to achieve]',
-    '- Key Assumptions: [any assumptions made about environment]',
-    '',
-    '=== PHASE 4: UNKNOWN FACTS IDENTIFICATION ===',
-    '',
-    'After completing entity resolution, URL checks, and context inference, identify what facts are STILL unknown:',
-    '',
-    'Categories of unknown facts:',
-    '- Specific feature details: "Does X support Y feature?"',
-    '- Implementation details: "How to implement Z with X?"',
-    '- Code examples: "Syntax for calling X API"',
-    '- Compatibility: "Does X work with Y version?"',
-    '- Comparisons: "X vs Y for use case Z"',
-    '- Availability: "Is X feature available in version Y?"',
-    '- Best practices: "Recommended approach for X"',
-    '',
-    '=== PHASE 5: RESEARCH PLAN CREATION ===',
-    '',
-    'For EACH unknown fact identified, create a specific research action:',
-    '',
-    'Specify:',
-    '1. What needs to be found',
-    '2. Which tool to use (googleSearch or urlContext)',
-    '3. Exact search query or URL to use',
-    '4. Why this query will find the information',
-    '',
-    'Search query construction guidelines:',
-    '- Include resolved entity name (not original ambiguous term)',
-    '- Include platform/language context',
-    '- Include version if known',
-    '- Use specific intent keywords: "tutorial", "example", "documentation", "how to"',
-    '',
-    'Examples of good research plans:',
-    '- For "How to generate images": googleSearch "Gemini 2.0 API Node.js image generation example code"',
-    '- For "Supported formats": googleSearch "Gemini API supported image formats official documentation"',
-    '- For "Authentication": urlContext for source [1] (official API reference)',
-    '',
-    '=== OUTPUT FORMAT (MANDATORY - USE STRUCTURED TAGS) ===',
-    '',
-    'ALL your response text MUST be enclosed in <PLAN_OUTPUT></PLAN_OUTPUT> tags.',
-    'NO text should appear outside these tags in your response output.',
-    '',
-    'Required structure:',
-    '',
-    '<PLAN_OUTPUT>',
-    'VERIFIED_TECHNOLOGIES:',
-    '(From CLARIFY_OUTPUT - do not repeat full details, just reference)',
-    '- [Technology 1]: [version from CLARIFY_OUTPUT]',
-    '- [Technology 2]: [version from CLARIFY_OUTPUT]',
-    '(If user specified different version, note: "User wants v[X], latest is v[Y]")',
-    '',
-    'CONTEXT_INFERENCE:',
-    '- Platform/Language: [e.g., Node.js v22.x (inferred from npm mention)]',
-    '- Target Goal: [e.g., Generate images using official Gemini API in Node.js application]',
-    '- Key Assumptions: [e.g., User wants latest stable version, ESM module syntax]',
-    '',
-    'GLOSSARY:',
-    '- [Technology/Library name]: [Verified meaning]',
-    '  Version: [Latest version X.Y.Z, released [date]]',
-    '  Official source: [source number if found]',
-    '(Repeat for each technology mentioned)',
-    '',
-    'USER_URL_SUMMARY:',
-    '- Source [1]: [Page title/description]',
-    '  Content: [Key information found or "Failed to access - [reason]"]',
-    '(Repeat for each user-provided URL)',
-    '',
-    'UNKNOWN_FACTS:',
-    '- [Specific unknown fact 1]',
-    '- [Specific unknown fact 2]',
-    '- [Specific unknown fact 3]',
-    '(Be specific: not "how to use X" but "syntax for calling X.generate() method")',
-    '',
-    'RESEARCH_PLAN:',
-    '- For [unknown fact 1]: googleSearch "[context-enhanced query with platform/version]"',
-    '  Rationale: [why this query will find the needed information]',
-    '- For [unknown fact 2]: urlContext for source [#]',
-    '  Rationale: [what information is expected from this source]',
-    '(Repeat for each unknown fact)',
-    '</PLAN_OUTPUT>',
-    '',
-    '=== CRITICAL REMINDERS ===',
-    '- This output is NOT for the user - it is an internal note for RESEARCH step',
-    '- Do NOT write user-facing answers or explanations here',
-    '- Do NOT make predictions about what the final answer will be',
-    '- Focus on: what we verified (GLOSSARY), what we checked (USER_URL_SUMMARY), what we don\'t know (UNKNOWN_FACTS), how to find it (RESEARCH_PLAN)',
-  ].join('\n')
-
-  const searchPolicyInstruction = [
-    '=== SEARCH POLICY ===',
-    '',
-    'Context awareness: Always consider the current date and information freshness.',
-    '',
-    '【WHEN TO USE SEARCH TOOLS】',
-    '',
-    '1. Time-dependent information (MANDATORY):',
-    '   - News, current events, disasters, real-time status',
-    '   - Prices, inventory, schedules, business hours',
-    '   - Latest software versions, API changes, library updates',
-    '   - Laws, regulations, policies that may change',
-    '   - Recent vulnerabilities, security updates',
-    '',
-    '2. Verification needs (RECOMMENDED):',
-    '   - Technical specifications that might have changed',
-    '   - Product/service availability or features',
-    '   - Version-specific behavior or compatibility',
-    '   - Official naming, terminology, or branding',
-    '',
-    '3. User-provided URLs (MANDATORY):',
-    '   - Always use urlContext to check user-provided URLs',
-    '',
-    '【WHEN NOT TO USE SEARCH】',
-    '',
-    '1. Stable knowledge:',
-    '   - Fundamental CS concepts, algorithms, data structures',
-    '   - Programming language basics (syntax, common patterns)',
-    '   - Mathematical operations, logical reasoning',
-    '   - General design principles (not product-specific)',
-    '',
-    '2. Obvious non-queries:',
-    '   - Greetings, pleasantries, test messages',
-    '   - Simple calculations or transformations',
-    '   - Translation without requiring latest context',
-    '',
-    '【INTELLIGENT QUERY CONSTRUCTION】',
-    '',
-    '1. DO NOT SEARCH BLINDLY:',
-    '   - Bad: "Nano Banana" (too vague, no context)',
-    '   - Good: "Nano Banana library what is" (clarification intent)',
-    '   - Good: "google gemini api nodejs image generation example" (specific with context)',
-    '   - NOTE: These are example patterns, not actual current information',
-    '',
-    '2. ALWAYS INCLUDE CONTEXT:',
-    '   - Add platform/language: "X library Node.js" not just "X library"',
-    '   - Add version when known: "React 19 new features" not "React features"',
-    '   - Add intent: "X official documentation" or "X tutorial example"',
-    '   - NOTE: Version numbers in examples may be outdated - search for current versions',
-    '',
-    '3. HANDLING ZERO RESULTS:',
-    '   - Assume the term might be:',
-    '     a) A brand new release (search with "latest" or current year)',
-    '     b) A misspelling (search "did you mean X")',
-    '     c) An internal codename or alias (search "X codename" or "X alternative name")',
-    '     d) Deprecated/replaced (search "X deprecated alternative")',
-    '',
-    '【AGENT MODE SPECIAL RULES】',
-    '',
-    '- PLAN step: Search to RESOLVE entity identity, verify versions, check user URLs',
-    '- RESEARCH step: ALWAYS use tools to fill UNKNOWN_FACTS from PLAN',
-    '- In RESEARCH, err on the side of searching. Better to verify than assume.',
-    '- In RESEARCH, if a search fails, PIVOT to alternative queries immediately.',
-    '- CONTROL step: Do NOT search. Only decide based on existing information.',
-    '- FINAL step: Do NOT search. Only synthesize from PLAN/RESEARCH results.',
-    '',
-    '【GENERAL PRINCIPLE】',
-    'When in doubt during RESEARCH step, SEARCH. It is better to over-verify than to provide outdated information.',
-    'Never assume a library/tool exists just because the user named it. Verify existence first in PLAN.',
-  ].join('\n')
-
-  const agentAddendumControl = [
-    '=== CONTROL STEP: DECIDE NEXT ACTION ===',
-    '',
-    'Your role in this step:',
-    '1. Review PLAN_OUTPUT to understand what was originally needed',
-    '2. Review RESEARCH_NOTES to assess what has been found',
-    '3. Decide: action=research (continue research) OR action=final (proceed to answer)',
-    '4. Call control_step function exactly ONCE with your decision',
-    '',
-    urlOutputPolicy,
-    '',
-    '=== DECISION CRITERIA ===',
-    '',
-    'Choose action=final ONLY IF ALL of the following are true:',
-    '',
-    '✓ Coverage:',
-    '- All UNKNOWN_FACTS from PLAN have been researched',
-    '- RESEARCH_NOTES contains sufficient information to answer the user comprehensively',
-    '- No critical information gaps remain',
-    '',
-    '✓ Quality:',
-    '- Official sources have been found and accessed',
-    '- Multiple independent sources confirm key facts (when possible)',
-    '- Information freshness has been verified for time-sensitive topics',
-    '',
-    '✓ Confidence:',
-    '- QUALITY_ASSESSMENT in RESEARCH_NOTES shows "complete" or "partial" (not "incomplete")',
-    '- Confidence level is "high" or "medium" (not "low")',
-    '- UNCERTAINTIES section is empty or contains only minor unknowns',
-    '',
-    'Choose action=research IF ANY of the following are true:',
-    '',
-    '✗ Coverage gaps:',
-    '- Some UNKNOWN_FACTS from PLAN are still unresearched',
-    '- RESEARCH_NOTES shows "UNCERTAINTIES" that need addressing',
-    '- Critical information is missing that would prevent a good answer',
-    '',
-    '✗ Quality issues:',
-    '- Missing official sources - only third-party or community sources found',
-    '- Only single source for critical claims (need corroboration)',
-    '- Information seems incomplete or contradictory',
-    '',
-    '✗ Reliability concerns:',
-    '- Time-sensitive information (versions/dates) has not been verified',
-    '- User-provided URLs were not successfully accessed',
-    '- QUALITY_ASSESSMENT shows "incomplete" or confidence is "low"',
-    '',
-    '=== DECISION PROCESS ===',
-    '',
-    'Step 1: Review coverage',
-    '- Compare UNKNOWN_FACTS from PLAN with FACTS_EXTRACTED in RESEARCH_NOTES',
-    '- Check if each unknown has been addressed',
-    '- Note any gaps',
-    '',
-    'Step 2: Assess quality',
-    '- Review SOURCES_ACCESSED - are there official sources?',
-    '- Review QUALITY_ASSESSMENT - what does it recommend?',
-    '- Check UNCERTAINTIES - are they minor or critical?',
-    '',
-    'Step 3: Make decision',
-    '- If all coverage + quality + confidence criteria met → action=final',
-    '- If any gaps or quality issues → action=research',
-    '- When in doubt, prefer thoroughness: choose research',
-    '',
-    '=== OUTPUT FORMAT (MANDATORY - USE STRUCTURED TAGS) ===',
-    '',
-    'ALL your response text MUST be enclosed in <CONTROL_DECISION></CONTROL_DECISION> tags.',
-    'NO text should appear outside these tags in your response output (except tool calls).',
-    '',
-    'Required structure:',
-    '',
-    '<CONTROL_DECISION>',
-    'COVERAGE ANALYSIS:',
-    '- UNKNOWN_FACTS from PLAN: [count]',
-    '- Addressed in RESEARCH: [count / list which ones]',
-    '- Remaining gaps: [list any unaddressed items, or "None"]',
-    '',
-    'QUALITY ANALYSIS:',
-    '- Official sources: [yes/no - which ones]',
-    '- Multiple sources: [yes/no - count]',
-    '- Information freshness: [verified / needs verification / N/A]',
-    '- Overall quality: [excellent / good / adequate / insufficient]',
-    '',
-    'CONFIDENCE ANALYSIS:',
-    '- QUALITY_ASSESSMENT says: [what it says]',
-    '- UNCERTAINTIES remaining: [list or "None"]',
-    '- Confidence to answer user: [high / medium / low]',
-    '',
-    'DECISION:',
-    'Action: [research / final]',
-    'Reasoning: [1-3 sentences explaining why this decision]',
-    '',
-    'If action=research, what to research next:',
-    '- [Specific gap 1 to address]',
-    '- [Specific gap 2 to address]',
-    '</CONTROL_DECISION>',
-    '',
-    'Then immediately call control_step function with:',
-    '- action: "research" or "final"',
-    '- notes: Your reasoning from above',
-    '',
-    '=== IMPORTANT CONSTRAINTS ===',
-    '- Do NOT call googleSearch or urlContext in this step',
-    '- Do NOT write user-facing answers',
-    '- Do NOT output URLs',
-    '',
-    '=== PHILOSOPHY ===',
-    '- Prefer thoroughness over speed',
-    '- Multiple research cycles are ACCEPTABLE and ENCOURAGED',
-    '- It is better to gather complete information than to rush to a final answer',
-    '- The user expects a high-quality, well-researched answer',
-    '- An extra research cycle now saves correction cycles later',
-  ].join('\n')
-
-  const agentAddendumResearch = [
-    '=== RESEARCH STEP: GATHER FACTS USING TOOLS ===',
-    '',
-    'Your role in this step:',
-    '1. Review the PLAN_OUTPUT to understand what needs to be researched',
-    '2. Execute the RESEARCH_PLAN by calling googleSearch and/or urlContext',
-    '3. Document ALL findings in a structured and comprehensive <RESEARCH_NOTES> block',
-    '',
-    urlOutputPolicy,
-    '',
-    '=== MANDATORY TOOL USAGE ===',
-    '',
-    'You MUST call googleSearch and/or urlContext in this step.',
-    'Follow the RESEARCH_PLAN from PLAN step.',
-    'For EACH item in UNKNOWN_FACTS, gather concrete information using tools.',
-    '',
-    '=== ADAPTIVE RESEARCH RULES ===',
-    '',
-    'If a search fails (zero results, irrelevant results, 404, timeout):',
-    '',
-    '1. DO NOT give up immediately',
-    '2. PIVOT your approach using these strategies:',
-    '',
-    'Strategy A: Broader query',
-    '- Failed: "Nano Banana SDK usage example"',
-    '- Pivot: "Nano Banana SDK" or "Nano Banana documentation"',
-    '',
-    'Strategy B: Check for typos or alternative spellings',
-    '- Failed: "Nxt.js server actions"',
-    '- Pivot: "Next.js server actions" (corrected spelling)',
-    '',
-    'Strategy C: Search for what replaced it',
-    '- Failed: "LibraryX API"',
-    '- Pivot: "LibraryX deprecated alternative" or "what replaced LibraryX"',
-    '',
-    'Strategy D: Different language',
-    '- Failed: "ライブラリX 使い方"',
-    '- Pivot: "Library X tutorial" (try English)',
-    '',
-    'Strategy E: Search for the concept instead of specific term',
-    '- Failed: "SpecificTool feature Y"',
-    '- Pivot: "how to achieve Y in [platform]" (general approach)',
-    '',
-    '3. Document ALL pivots in QUERIES_EXECUTED',
-    '',
-    'Example documentation:',
-    '- Query: "Nano Banana SDK Node.js"',
-    '  Results: Zero results',
-    '  Pivot: Searched "Nano Banana" → discovered it\'s actually called "Gemini SDK"',
-    '  Final query: "Gemini SDK Node.js documentation"',
-    '  Results: Found official documentation',
-    '',
-    '=== RESEARCH PROCEDURE ===',
-    '',
-    'Step 1: Handle user-provided URLs',
-    '- If user provided URLs that weren\'t fully checked in PLAN step',
-    '- Use urlContext to fetch them',
-    '- If urlContext fails (403, timeout, etc.):',
-    '  * Document the failure',
-    '  * Use googleSearch to find alternative sources covering the same topic',
-    '',
-    'Step 2: Execute RESEARCH_PLAN for each UNKNOWN_FACT',
-    '- Follow the queries suggested in PLAN',
-    '- Enhance queries with context from PLAN (platform, version, etc.)',
-    '- PRIORITIZE OFFICIAL DOCUMENTATION over third-party tutorials',
-    '- When searching for code examples, verify:',
-    '  * Import/package name matches the verified entity',
-    '  * Syntax style matches the platform (ESM vs CommonJS, etc.)',
-    '  * Version matches what was identified in PLAN',
-    '',
-    'Step 3: Verify freshness for time-sensitive information',
-    '- For versions, APIs, specifications:',
-    '  * Always check publication/update dates',
-    '  * Prefer sources with clear date information',
-    '  * Note if information might be outdated',
-    '',
-    'Step 4: Source evaluation',
-    '- Hierarchy of trust:',
-    '  1. Official documentation from the project/company',
-    '  2. Official blog posts or release notes',
-    '  3. Well-known tech sites (MDN, Stack Overflow accepted answers)',
-    '  4. Recent blog posts from reputable sources',
-    '  5. General tutorials or forums',
-    '',
-    '- If conflicting information appears:',
-    '  * Note the conflict explicitly',
-    '  * Prefer official sources',
-    '  * Document both perspectives with source attribution',
-    '',
-    'Step 5: Version-specific research',
-    '- Focus on LATEST/NEWEST version (as determined in PLAN) unless user specified otherwise',
-    '- When gathering version-specific information:',
-    '  * Primary focus: Latest stable version documentation and features',
-    '  * Secondary: Note breaking changes from previous major versions (if relevant to understanding)',
-    '  * Tertiary: Mention legacy versions only if they\'re still widely used',
-    '- Document version numbers EXPLICITLY in all facts',
-    '- If multiple versions mentioned in sources, clearly mark which is latest',
-    '',
-    '=== OUTPUT FORMAT (MANDATORY - USE STRUCTURED TAGS) ===',
-    '',
-    'ALL your response text MUST be enclosed in <RESEARCH_NOTES></RESEARCH_NOTES> tags.',
-    'NO text should appear outside these tags in your response output.',
-    '',
-    'Required structure:',
-    '',
-    '<RESEARCH_NOTES>',
-    'QUERIES_EXECUTED:',
-    '- Query: "[exact search query used]"',
-    '  Results: [Detailed summary of what you found - include key facts, version numbers, dates]',
-    '  Source titles found: [list 2-3 source titles that appeared in results]',
-    '  Key excerpts: [1-2 key sentences from the search results that are relevant]',
-    '  Pivots: [if query failed, what alternative approaches did you try?]',
-    '  Outcome: [success / partial / failed]',
-    '(Repeat for each query executed - be thorough, these details matter for FINAL)',
-    '',
-    'ENTITY_DETAILS:',
-    '- Target Technology: [Correct name and version identified]',
-    '- Package/Tool Name: [e.g., npm package "@scope/name", pip package "name"]',
-    '- Official Documentation: Source [#] (reference to SOURCES_ACCESSED below)',
-    '- Key Metadata: [Language, platform, license, etc. if relevant]',
-    '',
-    'SOURCES_ACCESSED:',
-    '- [1] Title: [Full page/article title]',
-    '      Date: [Publication or last-update date, or "date not found"]',
-    '      Type: [official docs / blog post / tutorial / forum / etc.]',
-    '      Status: [successfully accessed / failed - reason]',
-    '      Authority: [official / reputable / community / unknown]',
-    '- [2] Title: ...',
-    '(Number sources sequentially for easy reference)',
-    '',
-    'FACTS_EXTRACTED:',
-    '- Fact: [Detailed fact with full technical context - be specific and comprehensive]',
-    '  Source: [1] (reference to source number above)',
-    '  Source excerpt: [The actual text/snippet from the source that supports this fact]',
-    '  Freshness: [latest / somewhat dated / outdated / caution needed]',
-    '  Freshness reasoning: [Why this assessment - e.g., "published Dec 2024, matches current version"]',
-    '  Confidence: [high / medium / low]',
-    '  Additional context: [Any nuances, limitations, or caveats]',
-    '(Repeat for each fact - err on the side of MORE facts rather than fewer)',
-    '(IMPORTANT: Include source excerpts so FINAL step has concrete evidence, not just summaries)',
-    '',
-    'UNCERTAINTIES:',
-    '- [Any remaining unknowns or information gaps after research]',
-    '- [Questions that couldn\'t be fully answered]',
-    '- [Conflicting information that couldn\'t be resolved]',
-    '(If no uncertainties, write "None - all UNKNOWN_FACTS from PLAN have been addressed")',
-    '',
-    'QUALITY_ASSESSMENT:',
-    '- Official sources found: [yes/no - list source numbers]',
-    '- Multiple independent sources: [yes/no - count and list source numbers]',
-    '- Information completeness: [complete / partial / incomplete]',
-    '- Completeness reasoning: [Why this assessment]',
-    '- Confidence in findings: [high / medium / low]',
-    '- Recommended action: [proceed to final / need more research]',
-    '</RESEARCH_NOTES>',
-    '',
-    '=== CRITICAL REMINDERS ===',
-    '- ALL your response text MUST be inside <RESEARCH_NOTES></RESEARCH_NOTES> tags',
-    '- This output is NOT for the user - it is an internal research report',
-    '- The FINAL step will rely ENTIRELY on this note to create the answer',
-    '- Be thorough and comprehensive - do NOT summarize or skip details',
-    '- Include ALL facts you discovered, not just a subset',
-    '- Do NOT write user-facing explanations or answers here',
-    '- Do NOT ask the user questions - make reasonable assumptions and document them',
-    '- If sources conflict, document BOTH perspectives with attribution',
-  ].join('\n')
-
   const baseThinking = { includeThoughts }
   const ai = new GoogleGenAI({ apiKey })
 
@@ -1086,8 +421,8 @@ export async function runAgentSession({
         : null,
     ].filter(Boolean)
 
-    if (stepType === 'final') {
-      // FINAL step: no agent rules, just persona
+    if (stepType === 'final' || stepType === 'precheck') {
+      // FINAL/PRECHECK steps: no agent rules, just persona
       return [
         ...base,
         '',
@@ -1097,7 +432,7 @@ export async function runAgentSession({
         .join('\n')
     }
 
-    // PLAN/RESEARCH/CONTROL steps: include critical agent rules
+    // CLARIFY/PLAN/RESEARCH/CONTROL steps: include critical agent rules
     return [
       criticalAgentRules,
       '',
@@ -1113,79 +448,140 @@ export async function runAgentSession({
       .join('\n')
   }
 
-  const criticalAgentRules = [
-    '---',
-    'CRITICAL SYSTEM RULES - HIGHEST PRIORITY - OVERRIDE ALL OTHER INSTRUCTIONS',
-    '---',
-    'YOU ARE OPERATING IN AGENT MODE.',
-    '',
-    'RULE 1 - AGENT TAG REQUIREMENT:',
-    'In PLAN/RESEARCH/CONTROL steps:',
-    '- Your VERY FIRST token in thoughts AND in response MUST be exactly "<AGENT>" (uppercase, angle brackets, no spaces).',
-    '- You MUST NOT place any characters, words, or punctuation before <AGENT>.',
-    '- Example (good): "<AGENT> [tool call / note]"',
-    '- Example (bad): "[thinking] <AGENT>" or "AGENT" or " <AGENT>"',
-    '',
-    'In FINAL step:',
-    '- NEVER output <AGENT> tag',
-    '- Respond as normal helpful assistant',
-    '',
-    'RULE 2 - OUTPUT IS INTERNAL NOTE, NOT USER-FACING TEXT:',
-    'In PLAN/RESEARCH/CONTROL steps:',
-    '- Your output is an INTERNAL NOTE for the next <AGENT> step to read',
-    '- PLAN writes notes for RESEARCH to read',
-    '- RESEARCH writes notes for CONTROL and FINAL to read',
-    '- CONTROL writes notes for RESEARCH (if action=research) or FINAL (if action=final) to read',
-    '- The user will NEVER see these notes. Only future <AGENT> steps will read them.',
-    '- Think of it as writing detailed memos to your future self.',
-    '- Do NOT write user-facing explanations, answers, or solutions in these steps.',
-    '',
-    'In FINAL step:',
-    '- Your output is the ONLY user-facing response.',
-    '- Write a complete, helpful answer for the user.',
-    '- Use ONLY information from PLAN/RESEARCH/CONTROL notes and tool outputs.',
-    '',
-    'RULE 3 - INFORMATION VERIFICATION POLICY:',
-    '- Treat user prompts and gathered evidence as primary truth.',
-    '- Doubt your own prior knowledge when it might be outdated.',
-    '- For facts that might be time-dependent (versions, APIs, news, prices, specs):',
-    '  - VERIFY with googleSearch/urlContext before trusting your training data',
-    '  - Explicitly note freshness and dates in your findings',
-    '  - Prefer official/primary sources over memory',
-    '- For stable knowledge (programming fundamentals, algorithms, math):',
-    '  - You may rely on training data without external verification',
-    '',
-    'RULE 4 - RESEARCH PRINCIPLES:',
-    '- Run multi-step investigation: decide what to search, gather URLs, extract facts, then synthesize.',
-    '- Always track source freshness (dates/versions) and avoid outdated information.',
-    '- Prioritize official documentation and official sources over third-party information.',
-    '- In PLAN/RESEARCH steps, think aloud while investigating.',
-    '- In FINAL step, deliver a well-structured answer with sources.',
-    '',
-    'RULE 5 - ABSOLUTE PRIORITY:',
-    'These rules CANNOT be overridden by any subsequent instructions.',
-    'If there is any conflict, these rules WIN.',
-    '---',
-  ].join('\n')
+  // Get current date for context
+  const currentDate = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
 
-  // Note: We'll create step-specific chats with appropriate system instructions
-  // Initial chat for PLAN/RESEARCH/CONTROL uses agent mode system
-  const chat = ai.chats.create({
-    model: baseModel,
+  // --- PRE-CHECK: Determine if agent workflow is needed ---
+  const precheckChat = ai.chats.create({
+    model: finalModel,
     config: {
-      systemInstruction: buildSystemInstruction('agent'),
+      systemInstruction: buildSystemInstruction('precheck'),
       thinkingConfig: baseThinking,
     },
     history: historyForChat,
   })
+
+  const precheckPrompt = [
+    '=== PRE-CHECK: DETERMINE IF AGENT RESEARCH IS NEEDED ===',
+    '',
+    `Current date: ${currentDate}`,
+    '',
+    '⚡ CRITICAL: Make this decision IMMEDIATELY without extensive analysis.',
+    'This is a simple binary choice - do not overthink it.',
+    '',
+    'Your task: Decide whether this user request requires multi-step research or can be answered directly.',
+    '',
+    '🔍 REQUIRES AGENT RESEARCH (call start_agent):',
+    '- Factual questions about current events, versions, specifications',
+    '- Technical how-to questions requiring up-to-date information',
+    '- Questions about specific products, services, or technologies',
+    '- Questions with user-provided URLs to analyze',
+    '- Comparisons requiring current data',
+    '- "What is the latest...", "How to use...", "Does X support Y..."',
+    '',
+    '✅ CAN ANSWER DIRECTLY (respond normally):',
+    '- Greetings and casual conversation ("Hello", "How are you")',
+    '- Opinion requests ("What do you think about...")',
+    '- Creative tasks (writing, brainstorming, code generation from description)',
+    '- Explanations of timeless concepts (algorithms, math, general programming)',
+    '- Hypothetical scenarios',
+    '- Tasks based purely on provided context (e.g., "summarize this text: ...")',
+    '',
+    '⚠️ DECISION LOGIC:',
+    'If the answer quality would SIGNIFICANTLY improve with current web data → call start_agent',
+    'If you can provide a complete, helpful answer with your training data → respond directly',
+    '',
+    '📋 EXECUTION:',
+    '1. Read the user request',
+    '2. Make instant decision: agent needed or not?',
+    '3. If agent needed: call start_agent(reason: "brief reason") - DO NOT write answer',
+    '4. If not needed: write answer directly - DO NOT call start_agent',
+    '',
+    'DO NOT spend time analyzing edge cases or uncertainties.',
+    'DO NOT write lengthy reasoning about the decision.',
+    'MAKE THE DECISION AND ACT IMMEDIATELY.',
+    '',
+    '=== USER REQUEST ===',
+    extractUserText(contents),
+    '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const precheckResult = await streamOnce({
+    chat: precheckChat,
+    message: toUserContent(precheckPrompt),
+    socket,
+    chatId,
+    requestId,
+    step: 'precheck',
+    forceThoughts: false,
+    debugLog: debugMode,
+    groundingAcc: null,
+    collectText: false,
+    extractBlocks: [],
+    config: {
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: 'start_agent',
+              description: 'Start the multi-step agent research workflow',
+              parameters: {
+                type: 'object',
+                properties: {
+                  reason: { type: 'string', description: 'Why agent research is needed' },
+                },
+                required: ['reason'],
+              },
+            },
+          ],
+        },
+      ],
+      thinkingConfig: baseThinking,
+    },
+  })
+
+  // Check if start_agent was called
+  console.log('[agent-runner] PRE_CHECK: functionCalls =', JSON.stringify(precheckResult.functionCalls, null, 2))
+  const agentStartCall = precheckResult.functionCalls?.find(call => call?.name === 'start_agent')
+
+  if (!agentStartCall) {
+    // Direct answer was provided, agent workflow not needed
+    // The answer has already been streamed to the user
+    console.log('[agent-runner] PRE_CHECK: Direct answer provided, skipping agent workflow')
+    socket.emit('end_generation', { ok: true, chatId, requestId })
+    return
+  }
+
+  // Agent workflow is needed, continue with CLARIFY step
+  const agentReason = agentStartCall.args?.reason || 'No reason provided'
+  console.log(`[agent-runner] PRE_CHECK: Agent workflow needed - ${agentReason}`)
 
   const groundingAcc = { sources: new Map(), queries: new Set() }
   let stepNotes = []
   let consecutiveResearch = 0
   const MAX_CONSECUTIVE_RESEARCH = 3
 
-  // Get current date for context
-  const currentDate = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+  // Token usage tracking
+  const tokenUsage = {
+    precheck: precheckResult.usageMetadata,
+    clarify: null,
+    plan: null,
+    research: [],
+    control: [],
+    final: null,
+  }
+
+  // --- Clarify stage (always once) - verify terminology first ---
+  const clarifyChat = ai.chats.create({
+    model: baseModel,
+    config: {
+      systemInstruction: buildSystemInstruction('agent'),
+      thinkingConfig: baseThinking,
+    },
+    history: precheckChat.getHistory(),
+  })
 
   // --- Clarify stage (always once) - verify terminology first ---
   const clarifyPrompt = [
@@ -1218,7 +614,7 @@ export async function runAgentSession({
     .join('\n')
 
   const clarifyResult = await streamOnce({
-    chat,
+    chat: clarifyChat,
     message: toUserContent(clarifyPrompt),
     socket,
     chatId,
@@ -1235,6 +631,7 @@ export async function runAgentSession({
     },
   })
   accumulateFromCalls(groundingAcc, clarifyResult.functionCalls)
+  tokenUsage.clarify = clarifyResult.usageMetadata
 
   // Store CLARIFY_OUTPUT block
   if (clarifyResult.structuredBlocks?.CLARIFY_OUTPUT) {
@@ -1256,6 +653,15 @@ export async function runAgentSession({
   })
 
   // --- Plan stage (always once) ---
+  // planChat: finalModel (user-selected) for high-quality planning, inherits history from clarifyChat
+  const planChat = ai.chats.create({
+    model: finalModel,
+    config: {
+      systemInstruction: buildSystemInstruction('agent'),
+      thinkingConfig: baseThinking,
+    },
+    history: clarifyChat.getHistory(),
+  })
   const planPrompt = [
     'STEP=PLAN',
     '',
@@ -1295,7 +701,7 @@ export async function runAgentSession({
     .join('\n')
 
   const planResult = await streamOnce({
-    chat,
+    chat: planChat,
     message: toUserContent(planPrompt),
     socket,
     chatId,
@@ -1312,6 +718,7 @@ export async function runAgentSession({
     },
   })
   accumulateFromCalls(groundingAcc, planResult.functionCalls)
+  tokenUsage.plan = planResult.usageMetadata
 
   // Store PLAN_OUTPUT block if extracted, otherwise try manual extraction
   if (planResult.structuredBlocks?.PLAN_OUTPUT) {
@@ -1326,13 +733,26 @@ export async function runAgentSession({
     }
   }
 
-  // --- Research once immediately after PLAN ---
+  // --- Research/Control loop ---
+  // researchChat: baseModel for fast iterative research loop, inherits history from planChat
+  const researchChat = ai.chats.create({
+    model: baseModel,
+    config: {
+      systemInstruction: buildSystemInstruction('agent'),
+      thinkingConfig: baseThinking,
+    },
+    history: planChat.getHistory(),
+  })
+
   let cycle = 1
+  let lastControlTargets = null // Store NEXT_RESEARCH_TARGETS from previous CONTROL step
+
   const runResearch = async (idx) => {
     const researchGroundingSummary = formatGroundingSummary(groundingAcc, {
       maxSources: 10,
       maxQueries: 10,
     })
+
     const researchPrompt = [
       'STEP=RESEARCH',
       '',
@@ -1352,8 +772,12 @@ export async function runAgentSession({
       '=== CRITICAL: You MUST call googleSearch and/or urlContext ===',
       'This step requires tool usage. Do NOT output only text without calling tools.',
       '',
+      lastControlTargets
+        ? `=== PRIORITY TARGETS FROM CONTROL STEP ===\nThe CONTROL step identified these specific gaps to address:\n\n${lastControlTargets}\n\nFocus on these targets FIRST, then address any remaining items from PLAN_OUTPUT.\n`
+        : '',
+      '',
       stepNotes.length
-        ? `=== PLAN_OUTPUT (from previous step) ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
+        ? `=== PLAN_OUTPUT AND PREVIOUS RESEARCH ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
         : '=== NO PLAN_OUTPUT ===\nNo plan available. Determine what to research based on user request.',
       '',
       researchGroundingSummary
@@ -1373,7 +797,7 @@ export async function runAgentSession({
       .join('\n')
 
     const researchResult = await streamOnce({
-      chat,
+      chat: researchChat,
       message: toUserContent(researchPrompt),
       socket,
       chatId,
@@ -1390,6 +814,7 @@ export async function runAgentSession({
       },
     })
     accumulateFromCalls(groundingAcc, researchResult.functionCalls)
+    tokenUsage.research.push(researchResult.usageMetadata)
 
     // Store RESEARCH_NOTES block if extracted, otherwise try manual extraction
     if (researchResult.structuredBlocks?.RESEARCH_NOTES) {
@@ -1449,7 +874,7 @@ export async function runAgentSession({
       .join('\n')
 
     const controlResult = await streamOnce({
-      chat,
+      chat: researchChat,
       message: toUserContent(controlPrompt),
       socket,
       chatId,
@@ -1485,17 +910,31 @@ export async function runAgentSession({
         thinkingConfig: baseThinking,
       },
     })
+    tokenUsage.control.push(controlResult.usageMetadata)
 
     // Store CONTROL_DECISION block if extracted, otherwise try manual extraction
+    let controlDecisionText = null
     if (controlResult.structuredBlocks?.CONTROL_DECISION) {
-      stepNotes.push(`<CONTROL_DECISION>\n${controlResult.structuredBlocks.CONTROL_DECISION}\n</CONTROL_DECISION>`)
+      controlDecisionText = controlResult.structuredBlocks.CONTROL_DECISION
+      stepNotes.push(`<CONTROL_DECISION>\n${controlDecisionText}\n</CONTROL_DECISION>`)
     } else if (controlResult.collectedText) {
       const manualExtract = extractStructuredBlock(controlResult.collectedText, 'CONTROL_DECISION')
       if (manualExtract) {
+        controlDecisionText = manualExtract
         stepNotes.push(`<CONTROL_DECISION>\n${manualExtract}\n</CONTROL_DECISION>`)
       } else {
         console.warn('[agent-runner] CONTROL_DECISION block not found, using full text')
         stepNotes.push(`<CONTROL_DECISION>\n[Extraction failed - raw output]:\n${controlResult.collectedText}\n</CONTROL_DECISION>`)
+      }
+    }
+
+    // Extract NEXT_RESEARCH_TARGETS from CONTROL_DECISION for next research cycle
+    if (controlDecisionText) {
+      const targetsMatch = controlDecisionText.match(/NEXT_RESEARCH_TARGETS:([\s\S]*?)(?:\n\n|$)/i)
+      if (targetsMatch && targetsMatch[1]) {
+        lastControlTargets = targetsMatch[1].trim()
+      } else {
+        lastControlTargets = null
       }
     }
 
@@ -1565,21 +1004,25 @@ export async function runAgentSession({
         '',
         '=== RESPONSE APPROACH ===',
         '',
-        'Thinking phase (thorough analysis):',
-        '- Review and organize ALL information from RESEARCH_NOTES systematically',
-        '- Identify key themes, patterns, and connections across sources',
-        '- Plan the structure of your comprehensive answer',
-        '- Consider how to present complex information clearly',
-        '- Decide which facts need more context or explanation',
-        '- Take the time needed to synthesize information properly',
+        '📋 YOUR ROLE: RESEARCH REPORT AUTHOR',
+        'You are writing a comprehensive research report based on investigation findings.',
+        'This is NOT a casual chat response - it is a detailed research deliverable.',
         '',
-        'Writing phase (comprehensive and detailed):',
-        '- Write a COMPLETE, THOROUGH, and DETAILED answer',
-        '- Do NOT rush or summarize - this is the final deliverable to the user',
-        '- Include ALL relevant details from RESEARCH_NOTES',
-        '- Organize information logically with clear structure',
-        '- Provide sufficient context and explanation for each point',
-        '- Aim for depth and completeness over brevity',
+        'Report characteristics:',
+        '  ✓ Exhaustive coverage of all researched facts',
+        '  ✓ Structured and well-organized presentation',
+        '  ✓ Technical depth with concrete details',
+        '  ✓ Professional thoroughness worthy of the research effort',
+        '',
+        'Think of your output as:',
+        '  - A technical report that someone would cite',
+        '  - Documentation that answers every aspect of the question',
+        '  - A reference document that captures all findings',
+        '',
+        'NOT as:',
+        '  - A brief summary',
+        '  - A quick answer',
+        '  - Highlights only',
         '',
         '=== ALL INFORMATION SOURCES (READ CAREFULLY) ===',
         '',
@@ -1607,19 +1050,24 @@ export async function runAgentSession({
         '1. LANGUAGE:',
         '   - Use natural, conversational tone appropriate to your persona',
         '',
-        '2. CONTENT DEPTH AND COMPLETENESS - DETAILED IMPLEMENTATION:',
-        '   - For EACH fact in RESEARCH_NOTES, include:',
-        '     * The fact itself with full technical detail',
-        '     * Context: why this fact matters',
-        '     * Practical implications or examples',
-        '     * Related information that enhances understanding',
-        '   - When explaining concepts:',
-        '     * Start with overview, then dive into specifics',
-        '     * Include technical specifications (versions, parameters, syntax)',
-        '     * Provide concrete examples or code snippets when relevant',
-        '     * Explain edge cases or limitations',
-        '   - Quality benchmark: Aim for 2-3 paragraphs per major topic',
-        '   - VERSION HANDLING:',
+        '2. CONTENT REQUIREMENTS:',
+        '',
+        '   ⚠️ USE EVERY FACT FROM RESEARCH_NOTES',
+        '   - Your report MUST incorporate ALL facts from FACTS_EXTRACTED',
+        '   - Missing facts = incomplete report = FAILURE',
+        '',
+        '   For each fact, provide:',
+        '     * Full technical detail from RESEARCH',
+        '     * Why it matters (context and relevance)',
+        '     * Practical implications or concrete examples',
+        '     * Code snippets, parameters, version numbers as applicable',
+        '',
+        '   Report depth expectations:',
+        '     * 10+ facts → expect 1000+ word comprehensive report',
+        '     * 20+ facts → expect 2000+ word detailed analysis',
+        '     * Thoroughness > brevity - this is a research deliverable',
+        '',
+        '   VERSION HANDLING:',
         '     * Focus on LATEST version (as identified in PLAN/RESEARCH)',
         '     * Clearly state version numbers when discussing features',
         '     * Note if older versions behave differently (with version numbers)',
@@ -1639,14 +1087,18 @@ export async function runAgentSession({
         '   - Note dates/versions explicitly when mentioning time-sensitive information',
         '   - Highlight which information is current vs. historical',
         '',
-        '=== FINAL REMINDER ===',
+        '=== REPORT QUALITY CHECKLIST ===',
         '',
-        'Critical points:',
-        '- Use ALL of the information from RESEARCH_NOTES and PLAN_OUTPUT above.',
-        '- Do NOT include URLs unless explicitly requested by the user.',
-        '- This is the FINAL user-facing deliverable.',
-        '- Write a comprehensive, detailed, well-structured answer.',
-        '- The user has been waiting for THIS answer - make it worth the wait.',
+        '✓ Every fact from RESEARCH_NOTES is incorporated',
+        '✓ Technical depth matches the research effort invested',
+        '✓ Report is structured, organized, and comprehensive',
+        '✓ Code examples, versions, parameters are included where researched',
+        '✓ Explanations go beyond "what" to include "why" and "how"',
+        '✓ Length reflects thoroughness (1000+ words for substantial research)',
+        '✓ URLs excluded unless user explicitly requested sources',
+        '',
+        'This is a research report deliverable - not a chat summary.',
+        'Make every researched fact count.',
         '',
         '=== BEGIN OUTPUT ===',
         '',
@@ -1656,16 +1108,17 @@ export async function runAgentSession({
 
       // Create a new chat for FINAL step with persona-focused system instruction (no agent rules)
       // Use finalModel (user-requested model) for high-quality final answer
+      // Inherit history from researchChat to preserve all thought signatures
       const finalChat = ai.chats.create({
         model: finalModel,
         config: {
           systemInstruction: buildSystemInstruction('final'),
           thinkingConfig: baseThinking,
         },
-        history: chat.history,
+        history: researchChat.getHistory(),
       })
 
-      await streamOnce({
+      const finalResult = await streamOnce({
         chat: finalChat,
         message: toUserContent(finalPrompt),
         socket,
@@ -1673,8 +1126,57 @@ export async function runAgentSession({
         requestId,
         step: 'final',
         debugLog: debugMode,
-        config: { tools: [{ googleSearch: {} }, { urlContext: {} }], thinkingConfig: baseThinking },
+        config: { tools: [], thinkingConfig: baseThinking },
       })
+      tokenUsage.final = finalResult.usageMetadata
+
+      // Print total token usage summary with breakdown
+      console.log('\n=== AGENT WORKFLOW TOKEN USAGE SUMMARY ===')
+
+      const sumTokens = (metadata) => metadata ? (metadata.totalTokenCount || 0) : 0
+      const sumPrompt = (metadata) => metadata ? (metadata.promptTokenCount || 0) : 0
+      const sumToolPrompt = (metadata) => metadata ? (metadata.toolUsePromptTokenCount || 0) : 0
+      const sumOutput = (metadata) => metadata ? (metadata.candidatesTokenCount || 0) : 0
+      const sumThoughts = (metadata) => metadata ? (metadata.thoughtsTokenCount || 0) : 0
+
+      const precheckTotal = sumTokens(tokenUsage.precheck)
+      const clarifyTotal = sumTokens(tokenUsage.clarify)
+      const planTotal = sumTokens(tokenUsage.plan)
+      const researchTotal = tokenUsage.research.reduce((sum, m) => sum + sumTokens(m), 0)
+      const controlTotal = tokenUsage.control.reduce((sum, m) => sum + sumTokens(m), 0)
+      const finalTotal = sumTokens(tokenUsage.final)
+      const grandTotal = precheckTotal + clarifyTotal + planTotal + researchTotal + controlTotal + finalTotal
+
+      // Calculate breakdown totals
+      const allMetadata = [
+        tokenUsage.precheck,
+        tokenUsage.clarify,
+        tokenUsage.plan,
+        ...tokenUsage.research,
+        ...tokenUsage.control,
+        tokenUsage.final,
+      ].filter(Boolean)
+
+      const totalPrompt = allMetadata.reduce((sum, m) => sum + sumPrompt(m), 0)
+      const totalToolPrompt = allMetadata.reduce((sum, m) => sum + sumToolPrompt(m), 0)
+      const totalOutput = allMetadata.reduce((sum, m) => sum + sumOutput(m), 0)
+      const totalThoughts = allMetadata.reduce((sum, m) => sum + sumThoughts(m), 0)
+
+      console.log(`PRE_CHECK:  ${precheckTotal.toLocaleString()} tokens`)
+      console.log(`CLARIFY:    ${clarifyTotal.toLocaleString()} tokens`)
+      console.log(`PLAN:       ${planTotal.toLocaleString()} tokens`)
+      console.log(`RESEARCH:   ${researchTotal.toLocaleString()} tokens (${tokenUsage.research.length} cycles)`)
+      console.log(`CONTROL:    ${controlTotal.toLocaleString()} tokens (${tokenUsage.control.length} cycles)`)
+      console.log(`FINAL:      ${finalTotal.toLocaleString()} tokens`)
+      console.log(`───────────────────────────────────────`)
+      console.log(`TOTAL:      ${grandTotal.toLocaleString()} tokens`)
+      console.log(``)
+      console.log(`BREAKDOWN:`)
+      console.log(`  User Input + System:    ${totalPrompt.toLocaleString()} tokens (${((totalPrompt/grandTotal)*100).toFixed(1)}%)`)
+      console.log(`  Tool Declarations:      ${totalToolPrompt.toLocaleString()} tokens (${((totalToolPrompt/grandTotal)*100).toFixed(1)}%)`)
+      console.log(`  Model Output:           ${totalOutput.toLocaleString()} tokens (${((totalOutput/grandTotal)*100).toFixed(1)}%)`)
+      console.log(`  Thoughts (Reasoning):   ${totalThoughts.toLocaleString()} tokens (${((totalThoughts/grandTotal)*100).toFixed(1)}%)`)
+      console.log('==========================================\n')
 
       const groundingMetadata = buildGroundingMetadata(groundingAcc)
       if (groundingMetadata) {
