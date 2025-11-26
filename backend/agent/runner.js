@@ -9,6 +9,7 @@ import {
   controlTurnPrompt,
   criticalAgentRules,
   finalTurnPrompt,
+  finalSystemInstruction,
   flowInstruction,
   planTurnPrompt,
   researchTurnPrompt,
@@ -74,15 +75,21 @@ function emitContentParts({
   debugLog = false,
   urlContextMetadata = null,
 }) {
-  if (!socket || !parts.length) return
+  if (!socket) return
+  // Allow emitting metadata-only final chunks by injecting an empty part
+  const baseParts =
+    step === 'final' && urlContextMetadata && (!parts || !parts.length)
+      ? [{ text: '' }]
+      : parts || []
   const shapedParts = []
   let hasNonThought = false
 
+  // If FINAL has metadata but no parts, emit a placeholder empty part so frontends receive the metadata chunk
   // Detect step transition and add newline
   const isStepTransition = lastEmittedStep !== null && lastEmittedStep !== step
 
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i]
+  for (let i = 0; i < baseParts.length; i++) {
+    const part = baseParts[i]
     if (!part) continue
     if (part.text) {
       const thoughtFlag = forceAnswer
@@ -130,6 +137,10 @@ function emitContentParts({
     provider: 'gemini',
   }
   if (step === 'final' && urlContextMetadata) {
+    const grounding = groundingFromUrlContext(urlContextMetadata)
+    if (grounding) {
+      chunkPayload.grounding = grounding
+    }
     chunkPayload.urlContextMetadata = urlContextMetadata
   }
   socket.emit('chunk', chunkPayload)
@@ -202,6 +213,20 @@ function buildGroundingMetadata(acc) {
   return { sources, webSearchQueries }
 }
 
+// Convert urlContextMetadata (urlContexts array) into grounding-like shape for frontend consumption
+function groundingFromUrlContext(urlContextMetadata) {
+  if (!urlContextMetadata || !Array.isArray(urlContextMetadata.urlContexts)) return null
+  const groundingChunks = urlContextMetadata.urlContexts
+    .map((c) => {
+      const uri = c?.uri
+      const title = c?.title || c?.webPage?.title || null
+      return uri ? { web: { uri, title: title || '(no title)' } } : null
+    })
+    .filter(Boolean)
+  if (!groundingChunks.length) return null
+  return { groundingChunks }
+}
+
 function formatGroundingSummary(acc, { maxSources = 10, maxQueries = 10 } = {}) {
   const sources = Array.from(acc.sources.entries())
     .slice(0, maxSources)
@@ -239,18 +264,23 @@ async function streamOnce({
   let collectedText = ''
   let usageMetadata = null
   let finalUrlContextMetadata = null
+  let latestUrlMeta = null
 
   for await (const chunk of stream) {
     const candidate = chunk?.candidates?.[0] || {}
     const parts = candidate.content?.parts || []
-    if (collectUrlContextMetadata) {
-      const meta = buildUrlContextMetadata(
-        candidate?.urlContextMetadata || candidate?.groundingMetadata || candidate?.grounding
-      )
-      if (meta) {
-        finalUrlContextMetadata = meta
-      }
+    const urlMeta = collectUrlContextMetadata
+      ? buildUrlContextMetadata(candidate?.urlContextMetadata || candidate?.groundingMetadata || candidate?.grounding)
+      : null
+    if (urlMeta) {
+      finalUrlContextMetadata = urlMeta
+      latestUrlMeta = urlMeta
     }
+    if (!urlMeta && finalUrlContextMetadata) {
+      // preserve earlier metadata for later text chunks
+      latestUrlMeta = latestUrlMeta || finalUrlContextMetadata
+    }
+    const effectiveMeta = step === 'final' ? (urlMeta || latestUrlMeta || finalUrlContextMetadata) : null
     const shapeResult = emitContentParts({
       parts,
       socket,
@@ -261,7 +291,7 @@ async function streamOnce({
       forceAnswer,
       debugLog,
       // Only FINAL should surface urlContextMetadata to frontend
-      urlContextMetadata: step === 'final' ? candidate?.urlContextMetadata || null : null,
+      urlContextMetadata: effectiveMeta,
     })
     if (shapeResult?.hasNonThought) {
       hasAnswer = true
@@ -417,12 +447,10 @@ function buildThinkingConfig(parameters, includeThoughtsDefault = true) {
 // Extract FINAL_URLS entries from RESEARCH_NOTES blocks
 function extractFinalUrlsFromNotes(stepNotes = []) {
   const results = []
-  for (const note of stepNotes) {
-    if (!note || typeof note !== 'string') continue
-    if (!note.includes('<RESEARCH_NOTES>')) continue
-    const sectionMatch = note.match(/FINAL_URLS:\s*([\s\S]*?)(?:\n{2,}|<\/RESEARCH_NOTES>)/i)
-    if (!sectionMatch) continue
-    const lines = sectionMatch[1].split('\n')
+  const parseList = (text, regex) => {
+    const match = text.match(regex)
+    if (!match) return
+    const lines = match[1].split('\n')
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed.startsWith('-')) continue
@@ -434,6 +462,17 @@ function extractFinalUrlsFromNotes(stepNotes = []) {
           authority: m[3]?.trim() || null,
         })
       }
+    }
+  }
+
+  for (const note of stepNotes) {
+    if (!note || typeof note !== 'string') continue
+    if (note.includes('<CONTROL_DECISION>')) {
+      parseList(note, /FINAL_URLS_READY:\s*([\s\S]*?)(?:\n{2,}|NEXT_RESEARCH_TARGETS:|<\/CONTROL_DECISION>)/i)
+      continue
+    }
+    if (note.includes('<RESEARCH_NOTES>')) {
+      parseList(note, /FINAL_URLS:\s*([\s\S]*?)(?:\n{2,}|<\/RESEARCH_NOTES>)/i)
     }
   }
   return results
@@ -494,12 +533,24 @@ export async function runAgentSession({
         : null,
     ].filter(Boolean)
 
-    if (stepType === 'final' || stepType === 'precheck') {
-      // FINAL/PRECHECK steps: no agent rules, just persona
+    if (stepType === 'precheck') {
+      // PRECHECK: personaのみ、エージェント規約なし
       return [
         ...base,
         '',
         `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+
+    if (stepType === 'final') {
+      return [
+        ...base,
+        '',
+        finalSystemInstruction,
+        '',
+        `---\nASSISTANT PERSONA\n---\n\n${agentPersonaInstruction}`,
       ]
         .filter(Boolean)
         .join('\n')
@@ -958,6 +1009,19 @@ export async function runAgentSession({
       }
     }
 
+    // Emit CONTROL_DECISION text to frontend for visibility (tool calls often produce no parts)
+    if (socket && controlDecisionText) {
+      emitContentParts({
+        parts: [{ text: controlDecisionText, thought: true }],
+        socket,
+        chatId,
+        requestId,
+        step: `control-${cycle}`,
+        forceThoughts: true,
+        debugLog: debugMode,
+      })
+    }
+
     // Extract NEXT_RESEARCH_TARGETS from CONTROL_DECISION for next research cycle
     if (controlDecisionText) {
       const targetsMatch = controlDecisionText.match(/NEXT_RESEARCH_TARGETS:([\s\S]*?)(?:\n\n|$)/i)
@@ -998,8 +1062,8 @@ export async function runAgentSession({
             .join('\n')}\n`
         : '=== FINAL_URLS ===\nNone\n'
 
-      // Filter out CONTROL_DECISION blocks for FINAL step (they are internal decision notes)
-      const relevantNotes = stepNotes.filter(note => !note.includes('<CONTROL_DECISION>'))
+      const controlNotes = stepNotes.filter(note => note.includes('<CONTROL_DECISION>'))
+      const controlHandoff = controlNotes.length ? controlNotes[controlNotes.length - 1] : null
 
       const finalPrompt = [
         'STEP=FINAL',
@@ -1026,20 +1090,19 @@ export async function runAgentSession({
         '=== INFORMATION USAGE POLICY ===',
         '',
         '1. PRIMARY SOURCES (your main material):',
-        '   - PLAN_OUTPUT: Terms, definitions, user URL summaries',
-        '   - RESEARCH_NOTES: Facts, sources, dates from research',
-        '   - Tool outputs in chat history (googleSearch, urlContext results)',
+        '   - CONTROL_SUMMARY (latest CONTROL_DECISION block)',
+        '   - Tool outputs in chat history (urlContext results you fetch for FINAL_URLS)',
         '',
         '2. SUPPORTING CONTEXT (you MAY use general background knowledge to):',
-        '   - Explain fundamental concepts that help understand the research findings',
+        '   - Explain fundamental concepts that help understand the CONTROL_SUMMARY facts',
         '   - Provide context that makes technical information more accessible',
-        '   - Fill in obvious logical connections between researched facts',
+        '   - Fill in obvious logical connections between CONTROL_SUMMARY items',
         '',
         '3. WHAT YOU MUST NOT DO:',
-        '   - Do NOT add specific facts (versions, dates, specs) not found in RESEARCH',
-        '   - Do NOT contradict or override RESEARCH findings with training data',
-        '   - Do NOT make specific claims about current state without RESEARCH verification',
-        '   - If RESEARCH did not find certain information, acknowledge the gap explicitly',
+        '   - Do NOT add specific facts (versions, dates, specs) not found in CONTROL_SUMMARY or urlContext content',
+        '   - Do NOT contradict or override CONTROL_SUMMARY findings with training data',
+        '   - Do NOT make specific claims about current state without CONTROL_SUMMARY or urlContext support',
+        '   - If CONTROL_SUMMARY does not cover something, acknowledge the gap explicitly',
         '',
         '=== RESPONSE APPROACH ===',
         '',
@@ -1063,11 +1126,10 @@ export async function runAgentSession({
         '  - A quick answer',
         '  - Highlights only',
         '',
-        '=== ALL INFORMATION SOURCES (READ CAREFULLY) ===',
+        '=== CONTROL HANDOFF (READ CAREFULLY) ===',
         '',
-        relevantNotes.length
-          ? `${relevantNotes.join('\n\n---\n\n')}\n`
-          : 'No PLAN or RESEARCH notes available.',
+        'Use only CONTROL_SUMMARY and FINAL_URLS_READY from the CONTROL_DECISION below; other sections are informational.',
+        controlHandoff || 'No CONTROL_DECISION available.',
         '',
         finalUrlsSection,
         '',
@@ -1082,7 +1144,9 @@ export async function runAgentSession({
         finalTurnPrompt,
         '',
         '=== ORIGINAL USER REQUEST ===',
-        extractUserText(contents) || '(No user request text available)',
+        extractUserText(contents)
+          ? `${extractUserText(contents)}\n\nMANDATORY: Always fetch and reference every provided URL before answering.`
+          : '(No user request text available)\n\nMANDATORY: Always fetch and reference every provided URL before answering.',
         '',
         '=== URL OUTPUT POLICY FOR FINAL ANSWER ===',
         '- Carefully check the ORIGINAL USER REQUEST above.',
@@ -1095,12 +1159,12 @@ export async function runAgentSession({
         '',
         '2. CONTENT REQUIREMENTS:',
         '',
-        '   ⚠️ USE EVERY FACT FROM RESEARCH_NOTES',
-        '   - Your report MUST incorporate ALL facts from FACTS_EXTRACTED',
+        '   ⚠️ USE EVERY FACT FROM CONTROL_SUMMARY',
+        '   - Your report MUST incorporate ALL facts listed in CONTROL_SUMMARY (FACTS_READY)',
         '   - Missing facts = incomplete report = FAILURE',
         '',
         '   For each fact, provide:',
-        '     * Full technical detail from RESEARCH',
+        '     * Full technical detail available in CONTROL_SUMMARY and urlContext fetches',
         '     * Why it matters (context and relevance)',
         '     * Practical implications or concrete examples',
         '     * Code snippets, parameters, version numbers as applicable',
@@ -1119,10 +1183,10 @@ export async function runAgentSession({
         '3. SOURCES AND ATTRIBUTION (only if user requests):',
         '   - If the user explicitly asks for sources/URLs, add a "## Sources" section.',
         '   - List source titles ONLY by default; include URLs only when the user asked for links.',
-        '   - Maintain source numbering/IDs from RESEARCH_NOTES if you cite them.',
+        '   - Maintain source numbering/IDs from CONTROL_SUMMARY if you cite them.',
         '',
         '4. INFORMATION GAPS AND LIMITATIONS:',
-        '   - If RESEARCH did not find complete information, acknowledge gaps explicitly',
+        '   - If CONTROL_SUMMARY does not contain complete information, acknowledge gaps explicitly',
         '   - Clearly distinguish between: verified facts, partial information, and unknowns',
         '   - Suggest what additional information might be needed',
         '',
@@ -1132,7 +1196,7 @@ export async function runAgentSession({
         '',
         '=== REPORT QUALITY CHECKLIST ===',
         '',
-        '✓ Every fact from RESEARCH_NOTES is incorporated',
+        '✓ Every fact from CONTROL_SUMMARY is incorporated',
         '✓ Technical depth matches the research effort invested',
         '✓ Report is structured, organized, and comprehensive',
         '✓ Code examples, versions, parameters are included where researched',
@@ -1149,16 +1213,27 @@ export async function runAgentSession({
         .filter(Boolean)
         .join('\n')
 
+      // Build a lightweight FINAL history: original front-end history + CONTROL handoff (no research/plan logs)
+      const finalHistory = []
+      if (Array.isArray(historyForChat)) {
+        finalHistory.push(...historyForChat)
+      }
+      if (controlHandoff) {
+        finalHistory.push({
+          role: 'model',
+          parts: [{ text: controlHandoff }],
+        })
+      }
+
       // Create a new chat for FINAL step with persona-focused system instruction (no agent rules)
       // Use finalModel (user-requested model) for high-quality final answer
-      // Inherit history from researchChat to preserve all thought signatures
       const finalChat = ai.chats.create({
         model: finalModel,
         config: {
           systemInstruction: buildSystemInstruction('final'),
           thinkingConfig: baseThinking,
         },
-        history: researchChat.getHistory(),
+        history: finalHistory,
       })
 
       const finalResult = await streamOnce({
