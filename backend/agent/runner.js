@@ -11,30 +11,24 @@ import {
   finalTurnPrompt,
   finalSystemInstruction,
   flowInstruction,
+  commonAgentPolicies,
   planTurnPrompt,
   researchTurnPrompt,
   searchPolicyInstruction,
 } from './prompts.js'
 
-// Extract control_step action from function calls (handles both object and JSON string args).
-function extractStepAction(functionCalls) {
-  if (!Array.isArray(functionCalls)) return null
-  for (const call of functionCalls) {
-    if (call?.name !== 'control_step') continue
-    let args = call.args || call.arguments
-    if (typeof args === 'string') {
-      try {
-        args = JSON.parse(args)
-      } catch {
-        args = null
-      }
-    }
-    if (args && typeof args === 'object') {
-      const action = args.action || args.step
-      const notes = args.notes || args.message || null
-      if (action) return { action, notes }
-    }
-  }
+// Extract control decision and action from plain text CONTROL_DECISION blocks
+function extractControlActionFromText(text) {
+  if (!text || typeof text !== 'string') return null
+  const decisionMatch =
+    text.match(/DECISION:\s*([a-z]+)/i) ||
+    text.match(/Action:\s*([a-z]+)/i) ||
+    text.match(/Decision:\s*([a-z]+)/i)
+  if (!decisionMatch || !decisionMatch[1]) return null
+  const val = decisionMatch[1].toLowerCase()
+  if (val.includes('research')) return 'research'
+  if (val.includes('final')) return 'final'
+  if (val.includes('control')) return 'control_retry'
   return null
 }
 
@@ -43,7 +37,7 @@ let lastEmittedStep = null
 
 // Mandatory instruction injected into user prompts to enforce urlContext grounding
 const mandatoryFinalUrlInstruction =
-  'MANDATORY: Final answer must cite and be grounded in urlContext (browse) results for all FINAL_URLS. If URLs cannot be fetched, state the failure and do not answer from memory.'
+  'MANDATORY: Final answer must cite and be grounded in urlContext (google_browse) results for all FINAL_URLS. If URLs cannot be fetched, state the failure and do not answer from memory.'
 
 // Build urlContextMetadata from groundingMetadata if present
 function buildUrlContextMetadata(meta) {
@@ -76,11 +70,8 @@ function emitContentParts({
   urlContextMetadata = null,
 }) {
   if (!socket) return
-  // Allow emitting metadata-only final chunks by injecting an empty part
-  const baseParts =
-    step === 'final' && urlContextMetadata && (!parts || !parts.length)
-      ? [{ text: '' }]
-      : parts || []
+  const allowEmptyPart = step === 'final' && urlContextMetadata
+  const baseParts = parts || []
   const shapedParts = []
   let hasNonThought = false
 
@@ -91,37 +82,45 @@ function emitContentParts({
   for (let i = 0; i < baseParts.length; i++) {
     const part = baseParts[i]
     if (!part) continue
-    if (part.text) {
-      const thoughtFlag = forceAnswer
-        ? false
-        : forceThoughts
-          ? true
-          : !!part.thought
+    const hasTextField = part.text !== undefined && part.text !== null
+    if (!hasTextField && !allowEmptyPart) continue
 
-      let text = part.text
+    const thoughtFlag = forceAnswer
+      ? false
+      : forceThoughts
+        ? true
+        : !!part.thought
 
-      // Add newline at step transition (only for first part)
-      if (i === 0 && isStepTransition) {
-        text = '\n\n' + text
-      }
-      // Add newline between thought and answer content
-      else if (shapedParts.length > 0 && shapedParts[shapedParts.length - 1].thought && !thoughtFlag) {
-        text = '\n' + text
-      }
+    let text = hasTextField ? String(part.text) : ''
 
-      shapedParts.push({ text, thought: thoughtFlag })
-      if (!thoughtFlag) hasNonThought = true
-      if (debugLog) {
-        console.debug(
-          '[agent-debug] part text:',
-          JSON.stringify(part.text),
-          'thought:',
-          thoughtFlag,
-          'step:',
-          step
-        )
-      }
+    // Skip truly empty text when metadata-only emission is not allowed
+    if (!text && !allowEmptyPart) continue
+
+    // Add newline at step transition (only for first part)
+    if (i === 0 && isStepTransition && text) {
+      text = '\n\n' + text
     }
+    // Add newline between thought and answer content
+    else if (text && shapedParts.length > 0 && shapedParts[shapedParts.length - 1].thought && !thoughtFlag) {
+      text = '\n' + text
+    }
+
+    shapedParts.push({ text, thought: thoughtFlag })
+    if (!thoughtFlag) hasNonThought = true
+    if (debugLog) {
+      console.debug(
+        '[agent-debug] part text:',
+        JSON.stringify(part.text),
+        'thought:',
+        thoughtFlag,
+        'step:',
+        step
+      )
+    }
+  }
+
+  if (!shapedParts.length && allowEmptyPart) {
+    shapedParts.push({ text: '', thought: !!forceThoughts && !forceAnswer })
   }
 
   if (!shapedParts.length) return
@@ -218,7 +217,7 @@ function groundingFromUrlContext(urlContextMetadata) {
   if (!urlContextMetadata || !Array.isArray(urlContextMetadata.urlContexts)) return null
   const groundingChunks = urlContextMetadata.urlContexts
     .map((c) => {
-      const uri = c?.uri
+      const uri = c?.uri || c?.url || c?.webPage?.uri || c?.webPage?.url
       const title = c?.title || c?.webPage?.title || null
       return uri ? { web: { uri, title: title || '(no title)' } } : null
     })
@@ -444,40 +443,6 @@ function buildThinkingConfig(parameters, includeThoughtsDefault = true) {
   return config
 }
 
-// Extract FINAL_URLS entries from RESEARCH_NOTES blocks
-function extractFinalUrlsFromNotes(stepNotes = []) {
-  const results = []
-  const parseList = (text, regex) => {
-    const match = text.match(regex)
-    if (!match) return
-    const lines = match[1].split('\n')
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('-')) continue
-      const m = trimmed.match(/-\s*(.+?)\s*\((https?:\/\/[^\s)]+)\)\s*(?:-\s*(.+))?/)
-      if (m) {
-        results.push({
-          title: m[1].trim(),
-          url: m[2].trim(),
-          authority: m[3]?.trim() || null,
-        })
-      }
-    }
-  }
-
-  for (const note of stepNotes) {
-    if (!note || typeof note !== 'string') continue
-    if (note.includes('<CONTROL_DECISION>')) {
-      parseList(note, /FINAL_URLS_READY:\s*([\s\S]*?)(?:\n{2,}|NEXT_RESEARCH_TARGETS:|<\/CONTROL_DECISION>)/i)
-      continue
-    }
-    if (note.includes('<RESEARCH_NOTES>')) {
-      parseList(note, /FINAL_URLS:\s*([\s\S]*?)(?:\n{2,}|<\/RESEARCH_NOTES>)/i)
-    }
-  }
-  return results
-}
-
 // Extract structured blocks from agent output (e.g., <PLAN_OUTPUT>, <RESEARCH_NOTES>)
 function extractStructuredBlock(text, blockName) {
   if (!text || typeof text !== 'string') return null
@@ -524,6 +489,12 @@ export async function runAgentSession({
 
   // Build system instruction based on step type
   const buildSystemInstruction = (stepType) => {
+    const shared = [
+      criticalAgentRules,
+      '',
+      commonAgentPolicies,
+    ].filter(Boolean).join('\n')
+
     const base = [
       defaultSystemInstruction
         ? `---\nBASE SYSTEM INSTRUCTION\n---\n\n${defaultSystemInstruction}`
@@ -534,8 +505,8 @@ export async function runAgentSession({
     ].filter(Boolean)
 
     if (stepType === 'precheck') {
-      // PRECHECK: personaのみ、エージェント規約なし
       return [
+        shared,
         ...base,
         '',
         `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
@@ -546,6 +517,7 @@ export async function runAgentSession({
 
     if (stepType === 'final') {
       return [
+        shared,
         ...base,
         '',
         finalSystemInstruction,
@@ -558,7 +530,7 @@ export async function runAgentSession({
 
     // CLARIFY/PLAN/RESEARCH/CONTROL steps: include critical agent rules
     return [
-      criticalAgentRules,
+      shared,
       '',
       ...base,
       '',
@@ -667,25 +639,31 @@ export async function runAgentSession({
   })
 
   // Check if start_agent was called
-  console.log('[agent-runner] PRE_CHECK: functionCalls =', JSON.stringify(precheckResult.functionCalls, null, 2))
+  if (debugMode) {
+    console.log('[agent-runner] PRE_CHECK: functionCalls =', JSON.stringify(precheckResult.functionCalls, null, 2))
+  }
   const agentStartCall = precheckResult.functionCalls?.find(call => call?.name === 'start_agent')
 
   if (!agentStartCall) {
     // Direct answer was provided, agent workflow not needed
     // The answer has already been streamed to the user
-    console.log('[agent-runner] PRE_CHECK: Direct answer provided, skipping agent workflow')
+    if (debugMode) {
+      console.log('[agent-runner] PRE_CHECK: Direct answer provided, skipping agent workflow')
+    }
     socket.emit('end_generation', { ok: true, chatId, requestId })
     return
   }
 
   // Agent workflow is needed, continue with CLARIFY step
   const agentReason = agentStartCall.args?.reason || 'No reason provided'
-  console.log(`[agent-runner] PRE_CHECK: Agent workflow needed - ${agentReason}`)
+  if (debugMode) {
+    console.log(`[agent-runner] PRE_CHECK: Agent workflow needed - ${agentReason}`)
+  }
 
   const groundingAcc = { sources: new Map(), queries: new Set() }
-  let stepNotes = []
   let consecutiveResearch = 0
   const MAX_CONSECUTIVE_RESEARCH = 3
+  let latestControlDecisionText = null
 
   // Token usage tracking
   const tokenUsage = {
@@ -744,23 +722,16 @@ export async function runAgentSession({
     config: {
       tools: [{ googleSearch: {} }, { urlContext: {} }],
       thinkingConfig: baseThinking,
+      temperature: 1.5,
+      topP: 0.4,
     },
   })
   accumulateFromCalls(groundingAcc, clarifyResult.functionCalls)
   tokenUsage.clarify = clarifyResult.usageMetadata
-
-  // Store CLARIFY_OUTPUT block
-  if (clarifyResult.structuredBlocks?.CLARIFY_OUTPUT) {
-    stepNotes.push(`<CLARIFY_OUTPUT>\n${clarifyResult.structuredBlocks.CLARIFY_OUTPUT}\n</CLARIFY_OUTPUT>`)
-  } else if (clarifyResult.collectedText) {
-    const manualExtract = extractStructuredBlock(clarifyResult.collectedText, 'CLARIFY_OUTPUT')
-    if (manualExtract) {
-      stepNotes.push(`<CLARIFY_OUTPUT>\n${manualExtract}\n</CLARIFY_OUTPUT>`)
-    } else {
-      console.warn('[agent-runner] CLARIFY_OUTPUT block not found, using full text')
-      stepNotes.push(`<CLARIFY_OUTPUT>\n[Extraction failed - raw output]:\n${clarifyResult.collectedText}\n</CLARIFY_OUTPUT>`)
-    }
-  }
+  const clarifyOutputBlock =
+    clarifyResult.structuredBlocks && clarifyResult.structuredBlocks.CLARIFY_OUTPUT
+      ? clarifyResult.structuredBlocks.CLARIFY_OUTPUT
+      : null
 
   const includeGroundingSummary = process.env.AGENT_INCLUDE_GROUNDING === 'true'
   // Format grounding summary from CLARIFY for PLAN (only if enabled)
@@ -784,9 +755,7 @@ export async function runAgentSession({
     `=== CURRENT DATE ===`,
     `Today's date: ${currentDate}`,
     '',
-    stepNotes.length
-      ? `=== CLARIFY_OUTPUT (from previous step) ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
-      : '=== NO CLARIFY_OUTPUT ===\nNo terminology verification available.',
+    'Use the chat history above (including CLARIFY) to inform your plan.',
     '',
     includeGroundingSummary && clarifyGroundingSummary
       ? `=== SOURCES FOUND IN CLARIFY STEP ===\nThe CLARIFY step already searched and found these sources.\nThese are VERIFIED and TRUSTWORTHY - do not doubt them:\n\n${clarifyGroundingSummary}\n`
@@ -817,23 +786,12 @@ export async function runAgentSession({
     config: {
       tools: [{ googleSearch: {} }, { urlContext: {} }],
       thinkingConfig: baseThinking,
+      temperature: 1.5,
+      topP: 0.4,
     },
   })
   accumulateFromCalls(groundingAcc, planResult.functionCalls)
   tokenUsage.plan = planResult.usageMetadata
-
-  // Store PLAN_OUTPUT block if extracted, otherwise try manual extraction
-  if (planResult.structuredBlocks?.PLAN_OUTPUT) {
-    stepNotes.push(`<PLAN_OUTPUT>\n${planResult.structuredBlocks.PLAN_OUTPUT}\n</PLAN_OUTPUT>`)
-  } else if (planResult.collectedText) {
-    const manualExtract = extractStructuredBlock(planResult.collectedText, 'PLAN_OUTPUT')
-    if (manualExtract) {
-      stepNotes.push(`<PLAN_OUTPUT>\n${manualExtract}\n</PLAN_OUTPUT>`)
-    } else {
-      console.warn('[agent-runner] PLAN_OUTPUT block not found, using full text')
-      stepNotes.push(`<PLAN_OUTPUT>\n[Extraction failed - raw output]:\n${planResult.collectedText}\n</PLAN_OUTPUT>`)
-    }
-  }
 
   // --- Research/Control loop ---
   // researchChat: baseModel for fast iterative research loop, inherits history from planChat
@@ -848,6 +806,9 @@ export async function runAgentSession({
 
   let cycle = 1
   let lastControlTargets = null // Store NEXT_RESEARCH_TARGETS from previous CONTROL step
+  let controlRetry = false // If true, rerun CONTROL without new research
+  let controlRetryCount = 0
+  const MAX_CONTROL_RETRY = 2
 
   const runResearch = async (idx) => {
     const researchGroundingSummary = includeGroundingSummary
@@ -865,9 +826,7 @@ export async function runAgentSession({
         ? `=== PRIORITY TARGETS FROM CONTROL STEP ===\nThe CONTROL step identified these specific gaps to address:\n\n${lastControlTargets}\n\nFocus on these targets FIRST, then address any remaining items from PLAN_OUTPUT.\n`
         : '',
       '',
-      stepNotes.length
-        ? `=== PLAN_OUTPUT AND PREVIOUS RESEARCH ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
-        : '=== NO PLAN_OUTPUT ===\nNo plan available. Determine what to research based on user request.',
+      'Use the chat history (PLAN and prior RESEARCH) as your working notes. Do not rewrite summaries already in history.',
       '',
       includeGroundingSummary && researchGroundingSummary
         ? `=== SOURCES/QUERIES GATHERED SO FAR ===\n${researchGroundingSummary}\n`
@@ -902,29 +861,23 @@ export async function runAgentSession({
       config: {
         tools: [{ googleSearch: {} }, { urlContext: {} }],
         thinkingConfig: baseThinking,
+        temperature: 1.5,
+        topP: 0.4,
       },
     })
     accumulateFromCalls(groundingAcc, researchResult.functionCalls)
     tokenUsage.research.push(researchResult.usageMetadata)
 
-    // Store RESEARCH_NOTES block if extracted, otherwise try manual extraction
-    if (researchResult.structuredBlocks?.RESEARCH_NOTES) {
-      stepNotes.push(`<RESEARCH_NOTES>\n${researchResult.structuredBlocks.RESEARCH_NOTES}\n</RESEARCH_NOTES>`)
-    } else if (researchResult.collectedText) {
-      const manualExtract = extractStructuredBlock(researchResult.collectedText, 'RESEARCH_NOTES')
-      if (manualExtract) {
-        stepNotes.push(`<RESEARCH_NOTES>\n${manualExtract}\n</RESEARCH_NOTES>`)
-      } else {
-        console.warn('[agent-runner] RESEARCH_NOTES block not found, using full text')
-        stepNotes.push(`<RESEARCH_NOTES>\n[Extraction failed - raw output]:\n${researchResult.collectedText}\n</RESEARCH_NOTES>`)
-      }
-    }
   }
 
-  await runResearch(cycle)
-
-  // --- Control -> optional further Research loop ---
+  // --- Research/Control loop ---
   while (cycle <= maxSteps) {
+    if (!controlRetry) {
+      await runResearch(cycle)
+    } else {
+      controlRetry = false
+    }
+
     const groundingSummaryLoop = formatGroundingSummary(groundingAcc, {
       maxSources: 10,
       maxQueries: 10,
@@ -932,9 +885,7 @@ export async function runAgentSession({
     const controlPrompt = [
       'STEP=CONTROL',
       '',
-      stepNotes.length
-        ? `=== ALL NOTES SO FAR ===\n\n${stepNotes.join('\n\n---\n\n')}\n`
-        : '=== NO NOTES ===\nNo previous notes available.',
+      'Use the chat history so far (PLAN + RESEARCH cycles).',
       '',
       includeGroundingSummary && groundingSummaryLoop
         ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummaryLoop}\n`
@@ -946,7 +897,7 @@ export async function runAgentSession({
       '',
       controlTurnPrompt,
       '',
-      agentAddendumControl,
+      `${agentAddendumControl}\n\nRESPONSE CONSTRAINTS (TEXT ONLY):\n- Tools are disabled for CONTROL.\n- Output ONLY the <CONTROL_DECISION>...</CONTROL_DECISION> block as plain text with all required sections.\n- DECISION must be \"research\" or \"final\".\n- No other text before or after the block.`,
       '',
       '=== BEGIN OUTPUT ===',
       '',
@@ -966,64 +917,49 @@ export async function runAgentSession({
       groundingAcc: null,
       collectText: true,
       extractBlocks: ['CONTROL_DECISION'],
-      config: {
-        tools: [
-          {
-            functionDeclarations: [
-              {
-                name: 'control_step',
-                description: 'Decide whether to continue research or finalize.',
-                parameters: {
-                  type: 'object',
-                  properties: {
-                    action: {
-                      type: 'string',
-                      enum: ['research', 'final'],
-                    },
-                    notes: { type: 'string' },
-                  },
-                  required: ['action'],
-                },
-              },
-            ],
-          },
-        ],
-        thinkingConfig: baseThinking,
-      },
+      config: { temperature: 1.5, topP: 0.4, thinkingConfig: baseThinking },
     })
     tokenUsage.control.push(controlResult.usageMetadata)
 
-    // Store CONTROL_DECISION block if extracted, otherwise try manual extraction
-    let controlDecisionText = null
-    if (controlResult.structuredBlocks?.CONTROL_DECISION) {
-      controlDecisionText = controlResult.structuredBlocks.CONTROL_DECISION
-      stepNotes.push(`<CONTROL_DECISION>\n${controlDecisionText}\n</CONTROL_DECISION>`)
-    } else if (controlResult.collectedText) {
-      const manualExtract = extractStructuredBlock(controlResult.collectedText, 'CONTROL_DECISION')
-      if (manualExtract) {
-        controlDecisionText = manualExtract
-        stepNotes.push(`<CONTROL_DECISION>\n${manualExtract}\n</CONTROL_DECISION>`)
+    const controlDecisionText = (
+      controlResult.structuredBlocks?.CONTROL_DECISION ||
+      extractStructuredBlock(controlResult.collectedText, 'CONTROL_DECISION') ||
+      ''
+    ).trim()
+    let decisionAction = extractControlActionFromText(controlDecisionText) || 'research'
+
+    if (!controlDecisionText) {
+      // Missing notes: rerun CONTROL without triggering a new research cycle
+      controlRetry = true
+      controlRetryCount += 1
+      lastControlTargets = null
+      if (controlRetryCount > MAX_CONTROL_RETRY) {
+        console.warn('[agent-runner] Max control retries reached, forcing final')
+        decisionAction = 'final'
+        controlRetry = false
       } else {
-        console.warn('[agent-runner] CONTROL_DECISION block not found, using full text')
-        stepNotes.push(`<CONTROL_DECISION>\n[Extraction failed - raw output]:\n${controlResult.collectedText}\n</CONTROL_DECISION>`)
+        if (socket) {
+          emitContentParts({
+            parts: [
+              {
+                text: 'CONTROL_DECISION missing notes; rerunning CONTROL without new research.',
+                thought: true,
+              },
+            ],
+            socket,
+            chatId,
+            requestId,
+            step: `control-${cycle}`,
+            forceThoughts: true,
+            debugLog: debugMode,
+          })
+        }
+        cycle += 1
+        continue
       }
-    }
-
-    // Emit CONTROL_DECISION text to frontend for visibility (tool calls often produce no parts)
-    if (socket && controlDecisionText) {
-      emitContentParts({
-        parts: [{ text: controlDecisionText, thought: true }],
-        socket,
-        chatId,
-        requestId,
-        step: `control-${cycle}`,
-        forceThoughts: true,
-        debugLog: debugMode,
-      })
-    }
-
-    // Extract NEXT_RESEARCH_TARGETS from CONTROL_DECISION for next research cycle
-    if (controlDecisionText) {
+    } else {
+      controlRetryCount = 0
+      latestControlDecisionText = controlDecisionText
       const targetsMatch = controlDecisionText.match(/NEXT_RESEARCH_TARGETS:([\s\S]*?)(?:\n\n|$)/i)
       if (targetsMatch && targetsMatch[1]) {
         lastControlTargets = targetsMatch[1].trim()
@@ -1032,10 +968,6 @@ export async function runAgentSession({
       }
     }
 
-    const controlCalls = controlResult.functionCalls
-    const controlDecision = extractStepAction(controlCalls)
-    let decisionAction = controlDecision?.action || 'final'
-
     // Infinite loop protection
     if (decisionAction === 'research') {
       consecutiveResearch += 1
@@ -1043,27 +975,20 @@ export async function runAgentSession({
         console.warn('[agent-runner] Max consecutive research reached, forcing final')
         decisionAction = 'final'
       }
+      controlRetryCount = 0
     } else {
       consecutiveResearch = 0
     }
+
+    // No control_retry branch; CONTROL is text-only and DECISION must be research|final
 
     if (decisionAction === 'final' || cycle === maxSteps) {
       const groundingSummary = formatGroundingSummary(groundingAcc, {
         maxSources: 10,
         maxQueries: 10,
       })
-      const finalUrls = extractFinalUrlsFromNotes(stepNotes)
-      if (debugMode) {
-        console.log('[agent-runner] FINAL_URLS extracted:', finalUrls.length, finalUrls)
-      }
-      const finalUrlsSection = finalUrls.length
-        ? `=== FINAL_URLS (fetch with urlContext before answering) ===\n${finalUrls
-            .map((u, idx) => `[${idx + 1}] ${u.title} (${u.url})${u.authority ? ` - ${u.authority}` : ''}`)
-            .join('\n')}\n`
-        : '=== FINAL_URLS ===\nNone\n'
 
-      const controlNotes = stepNotes.filter(note => note.includes('<CONTROL_DECISION>'))
-      const controlHandoff = controlNotes.length ? controlNotes[controlNotes.length - 1] : null
+      const controlHandoff = latestControlDecisionText
 
       const finalPrompt = [
         'STEP=FINAL',
@@ -1128,14 +1053,18 @@ export async function runAgentSession({
         '',
         '=== CONTROL HANDOFF (READ CAREFULLY) ===',
         '',
-        'Use only CONTROL_SUMMARY and FINAL_URLS_READY from the CONTROL_DECISION below; other sections are informational.',
-        controlHandoff || 'No CONTROL_DECISION available.',
-        '',
-        finalUrlsSection,
-        '',
-        includeGroundingSummary && groundingSummary
-          ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}\n`
-          : '',
+      'Use CONTROL_DECISION below (CONTROL_SUMMARY with FACTS_READY/FINAL_URLS_READY/ANSWER_PLAN, PLAN_UPDATES, NEXT_RESEARCH_TARGETS); other sections are informational.',
+      controlHandoff || 'No CONTROL_DECISION available.',
+      '',
+      clarifyOutputBlock
+        ? '=== CLARIFY OUTPUT (FULL) ===\nUse VERIFIED_TERMS as-is; do NOT re-summarize. Treat these as authoritative.\n\n' +
+          clarifyOutputBlock +
+          '\n'
+        : '',
+      '',
+      includeGroundingSummary && groundingSummary
+        ? `=== SOURCES/QUERIES SUMMARY ===\n${groundingSummary}\n`
+        : '',
         '',
         userUrls.length
           ? `=== USER-PROVIDED URLs ===\n${userUrls.map(u => `- ${u}`).join('\n')}\n`
@@ -1258,12 +1187,6 @@ export async function runAgentSession({
       if (debugMode && finalResult.urlContextMetadata) {
         console.debug('[agent-runner] FINAL urlContextMetadata collected:', JSON.stringify(finalResult.urlContextMetadata, null, 2))
       }
-      if (finalUrls.length && !finalUrlCalls.length) {
-        console.warn('[agent-runner] FINAL expected urlContext calls for FINAL_URLS but none observed')
-      }
-      if (finalUrls.length && !finalResult.urlContextMetadata) {
-        console.warn('[agent-runner] FINAL urlContextMetadata missing despite FINAL_URLS being present')
-      }
 
       // Print total token usage summary with breakdown
       if (debugMode) {
@@ -1325,6 +1248,5 @@ export async function runAgentSession({
     }
 
     cycle += 1
-    await runResearch(cycle)
   }
 }
