@@ -162,6 +162,7 @@ const DUMMY_MODEL_NAME = 'dummy'
 // Agent model definitions: virtual name -> actual base model mapping
 const AGENT_MODELS = {
   'agent-gemini-2.5-flash': 'gemini-2.5-flash',
+  'agent-gemini-2.5-pro': 'gemini-2.5-pro',
   'agent-gemini-3-pro-preview': 'gemini-3-pro-preview',
 }
 

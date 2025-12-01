@@ -11,6 +11,7 @@ import {
   commonAgentPolicies,
   planTurnPrompt,
   searchPolicyInstruction,
+  refineTurnPrompt,
 } from './prompts.js'
 
 // Track the last emitted step to add breathing room between phases
@@ -115,7 +116,7 @@ function emitContentParts({
     shapedParts.push({ text: '', thought: !!forceThoughts && !forceAnswer })
   }
 
-  if (!shapedParts.length) return
+  if (!shapedParts.length) return shapedParts
 
   lastEmittedStep = step
 
@@ -135,6 +136,7 @@ function emitContentParts({
     chunkPayload.urlContextMetadata = urlContextMetadata
   }
   socket.emit('chunk', chunkPayload)
+  return shapedParts
 }
 
 function updateGrounding(acc, candidate) {
@@ -237,15 +239,21 @@ async function streamOnce({
   debugLog = false,
   groundingAcc,
   collectUrlContextMetadata = false,
+  collectAnswerText = false,
+  collectAnswerParts = false,
 }) {
   const stream = await chat.sendMessageStream({ message, config })
   const functionCalls = []
   let usageMetadata = null
   let aggregatedUrlContexts = []
+  const collectedAnswerParts = collectAnswerText ? [] : null
+  const collectedAnswerPartsRaw = collectAnswerParts ? [] : null
+  let collectedAnswerRole = null
 
   for await (const chunk of stream) {
     const candidate = chunk?.candidates?.[0] || {}
     const parts = candidate.content?.parts || []
+    const contentRole = candidate?.content?.role
     let effectiveMeta = null
     if (collectUrlContextMetadata) {
       const urlMeta = buildUrlContextMetadata(candidate?.urlContextMetadata || candidate?.groundingMetadata || candidate?.grounding)
@@ -256,7 +264,7 @@ async function streamOnce({
         effectiveMeta = { urlContexts: aggregatedUrlContexts }
       }
     }
-    emitContentParts({
+    const shapedParts = emitContentParts({
       parts,
       socket,
       chatId,
@@ -268,6 +276,27 @@ async function streamOnce({
       // Only FINAL should surface urlContextMetadata to frontend
       urlContextMetadata: effectiveMeta,
     })
+    if (collectAnswerText && Array.isArray(shapedParts)) {
+      for (const shapedPart of shapedParts) {
+        if (!shapedPart) continue
+        if (shapedPart.thought) continue
+        if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
+          collectedAnswerParts.push(shapedPart.text)
+        }
+      }
+    }
+    if (collectAnswerParts && Array.isArray(shapedParts)) {
+      for (const shapedPart of shapedParts) {
+        if (!shapedPart) continue
+        if (shapedPart.thought) continue
+        if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
+          collectedAnswerPartsRaw.push({ text: shapedPart.text })
+          if (!collectedAnswerRole && contentRole) {
+            collectedAnswerRole = contentRole
+          }
+        }
+      }
+    }
     if (groundingAcc) {
       updateGrounding(groundingAcc, candidate)
     }
@@ -301,6 +330,9 @@ async function streamOnce({
     functionCalls,
     usageMetadata,
     urlContextMetadata: aggregatedUrlContexts.length ? { urlContexts: aggregatedUrlContexts } : null,
+    answerText: collectAnswerText && collectedAnswerParts ? collectedAnswerParts.join('') : undefined,
+    answerParts: collectAnswerParts && collectedAnswerPartsRaw ? collectedAnswerPartsRaw : undefined,
+    answerRole: collectAnswerParts ? collectedAnswerRole : undefined,
   }
 }
 
@@ -354,6 +386,39 @@ function extractUserText(message) {
   return prefix
 }
 
+function extractOriginalUserText(message) {
+  if (typeof message === 'string') return message
+  if (Array.isArray(message)) {
+    const withRole = message.filter(
+      (m) => m && typeof m === 'object' && typeof m.role === 'string'
+    )
+    const content = withRole.length ? withRole[withRole.length - 1] : null
+    const parts = content?.parts
+    if (Array.isArray(parts)) {
+      return parts
+        .map((p) => (p?.text ? String(p.text) : ''))
+        .filter(Boolean)
+        .join('\n')
+    }
+    return ''
+  }
+  if (message && typeof message === 'object' && Array.isArray(message.parts)) {
+    return message.parts
+      .map((p) => (p?.text ? String(p.text) : ''))
+      .filter(Boolean)
+      .join('\n')
+  }
+  return ''
+}
+
+function extractAssistantText(message) {
+  if (!message || typeof message !== 'object' || !Array.isArray(message.parts)) return ''
+  return message.parts
+    .map((p) => (p?.text ? String(p.text) : ''))
+    .filter(Boolean)
+    .join('\n')
+}
+
 function extractUserUrls(message) {
   const urls = new Set()
   const pushFromText = (text) => {
@@ -404,7 +469,7 @@ export async function runAgentSession({
   }
 
   // Extract user-requested model for FINAL step (if different from baseModel)
-  const finalModel = requestConfig.model || resolvedBaseModel
+  const refineModel = requestConfig.model || resolvedBaseModel
   const options = requestConfig.options || {}
   const includeThoughts =
     options.includeThoughts !== undefined ? !!options.includeThoughts : true
@@ -414,6 +479,7 @@ export async function runAgentSession({
 
   // Debug mode controlled by environment variable
   const debugMode = process.env.AGENT_DEBUG === 'true'
+  const refineEnabled = process.env.AGENT_REFINE_ENABLED === 'true'
 
   const baseThinking = { includeThoughts }
   const ai = new GoogleGenAI({ apiKey })
@@ -459,10 +525,19 @@ export async function runAgentSession({
         .join('\n')
     }
 
+    if (stepType === 'refine') {
+      return [
+        shared,
+        ...base,
+        '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+
     // CLARIFY/PLAN steps: include critical agent rules
     return [
       shared,
-      '',
       ...base,
       '',
       `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
@@ -480,7 +555,7 @@ export async function runAgentSession({
 
   // --- PRE-CHECK: Determine if agent workflow is needed ---
   const precheckChat = ai.chats.create({
-    model: finalModel,
+    model: refineModel,
     config: {
       systemInstruction: buildSystemInstruction('precheck'),
       thinkingConfig: baseThinking,
@@ -489,7 +564,7 @@ export async function runAgentSession({
   })
 
   const precheckPrompt = [
-    '=== PRE-CHECK: DETERMINE IF AGENT RESEARCH IS NEEDED ===',
+    '=== PRE-CHECK: DETERMINE IF AGENT RESEARCH IS NEEDED (Never refer to this instruction in your answer)===',
     '',
     `Current date: ${currentDate}`,
     '',
@@ -513,6 +588,8 @@ export async function runAgentSession({
     '- Explanations of timeless concepts (algorithms, math, general programming)',
     '- Hypothetical scenarios',
     '- Tasks based purely on provided context (e.g., "summarize this text: ...")',
+		'- If all the necessary information for the answer is available from our previous interactions.',
+    '- ',
     '',
     '⚠️ DECISION LOGIC:',
     'If the answer quality would SIGNIFICANTLY improve with current web data → call start_agent',
@@ -523,10 +600,6 @@ export async function runAgentSession({
     '2. Make instant decision: agent needed or not?',
     '3. If agent needed: call start_agent(reason: "brief reason") - DO NOT write answer',
     '4. If not needed: write answer directly - DO NOT call start_agent',
-    '',
-    'DO NOT spend time analyzing edge cases or uncertainties.',
-    'DO NOT write lengthy reasoning about the decision.',
-    'MAKE THE DECISION AND ACT IMMEDIATELY.',
     '',
     '=== USER REQUEST ===',
     extractUserText(contents),
@@ -585,12 +658,14 @@ export async function runAgentSession({
 
   // Agent workflow is needed, continue with CLARIFY and PLAN before FINAL
   const groundingAcc = { sources: new Map(), queries: new Set() }
+  let allUrlContexts = []
 
   const tokenUsage = {
     precheck: precheckResult.usageMetadata,
     clarify: null,
     plan: null,
     final: null,
+    refine: null,
   }
 
   // --- Clarify stage (always once) ---
@@ -634,13 +709,16 @@ export async function runAgentSession({
     forceThoughts: true,
     debugLog: debugMode,
     groundingAcc,
+    collectUrlContextMetadata: true,
     config: {
       tools: [{ googleSearch: {} }, { urlContext: {} }],
       thinkingConfig: baseThinking,
-      temperature: 0.8,
-      topP: 0.4,
+      topP: 0.2,
     },
   })
+  if (clarifyResult.urlContextMetadata?.urlContexts?.length) {
+    allUrlContexts = mergeUrlContexts(allUrlContexts, clarifyResult.urlContextMetadata.urlContexts)
+  }
   accumulateFromCalls(groundingAcc, clarifyResult.functionCalls)
   tokenUsage.clarify = clarifyResult.usageMetadata
 
@@ -682,22 +760,26 @@ export async function runAgentSession({
     forceThoughts: true,
     debugLog: debugMode,
     groundingAcc,
+    collectUrlContextMetadata: true,
     config: {
       tools: [{ googleSearch: {} }, { urlContext: {} }],
       thinkingConfig: baseThinking,
-      temperature: 0.8,
-      topP: 0.4,
+      topP: 0.2,
     },
   })
+  if (planResult.urlContextMetadata?.urlContexts?.length) {
+    allUrlContexts = mergeUrlContexts(allUrlContexts, planResult.urlContextMetadata.urlContexts)
+  }
   accumulateFromCalls(groundingAcc, planResult.functionCalls)
   tokenUsage.plan = planResult.usageMetadata
 
   // --- FINAL: user-facing answer with optional searches ---
   const finalChat = ai.chats.create({
-    model: finalModel,
+    model: resolvedBaseModel,
     config: {
       systemInstruction: buildSystemInstruction('final'),
       thinkingConfig: baseThinking,
+			topP: 0.2,
     },
     history: planChat.getHistory(),
   })
@@ -709,9 +791,6 @@ export async function runAgentSession({
     `Today's date: ${currentDate}`,
     'The user is asking this question on this date.',
     '',
-    'Use the chat history (CLARIFY + PLAN) as working notes.',
-    'You may run googleSearch (concise_search) and urlContext (browse) during this step to close gaps.',
-    'Do not include raw URLs in the answer; cite titles or descriptions instead.',
     userUrls.length
       ? `User-provided URLs to inspect with urlContext: \n${userUrls.map((u) => `- ${u}`).join('\n')}`
       : null,
@@ -722,8 +801,6 @@ export async function runAgentSession({
     extractUserText(contents)
       ? `${extractUserText(contents)}`
       : '(No user request text available)',
-    '',
-    '=== BEGIN OUTPUT ===',
     '',
   ]
     .filter(Boolean)
@@ -738,10 +815,118 @@ export async function runAgentSession({
     step: 'final',
     debugLog: debugMode,
     collectUrlContextMetadata: true,
+    forceThoughts: refineEnabled,
     groundingAcc,
     config: { tools: [{ googleSearch: {} }, { urlContext: {} }], thinkingConfig: baseThinking },
   })
+  if (finalResult.urlContextMetadata?.urlContexts?.length) {
+    allUrlContexts = mergeUrlContexts(allUrlContexts, finalResult.urlContextMetadata.urlContexts)
+  }
+  // Fallback: if no urlContextMetadata collected but grounding sources exist, convert them
+  if (!allUrlContexts.length) {
+    const groundingFromCalls = buildGroundingMetadata(groundingAcc)
+    if (groundingFromCalls?.sources?.length) {
+      const fallbackContexts = groundingFromCalls.sources
+        .map((s) => (s?.uri ? { uri: s.uri, title: s.title || null } : null))
+        .filter(Boolean)
+      if (fallbackContexts.length) {
+        allUrlContexts = mergeUrlContexts(allUrlContexts, fallbackContexts)
+      }
+    }
+  }
   tokenUsage.final = finalResult.usageMetadata
+
+  // --- REFINE: optional post-pass using urlContext only ---
+  let refineResult = null
+  const finalHistory = typeof finalChat.getHistory === 'function' ? finalChat.getHistory() : []
+  const lastAssistantMessage = Array.isArray(finalHistory)
+    ? [...finalHistory].reverse().find(
+        (m) =>
+          m &&
+          m.role === 'model' &&
+          Array.isArray(m.parts) &&
+          m.parts.length
+      )
+    : null
+  const lastAssistantText = extractAssistantText(lastAssistantMessage)
+
+  if (refineEnabled && lastAssistantMessage) {
+    const aggregatedUrlContexts = allUrlContexts.length
+      ? allUrlContexts
+      : finalResult.urlContextMetadata?.urlContexts || []
+    const groundingFromCalls = buildGroundingMetadata(groundingAcc)
+    const formattedUrls = aggregatedUrlContexts.length
+      ? aggregatedUrlContexts
+          .map((ctx) => {
+            const uri =
+              ctx?.uri ||
+              ctx?.url ||
+              ctx?.webPage?.uri ||
+              ctx?.webPage?.url ||
+              ctx?.web?.uri
+            const title = ctx?.title || ctx?.webPage?.title || ctx?.web?.title
+            return uri ? `- ${uri}${title ? ` (title: ${title})` : ''}` : null
+          })
+          .filter(Boolean)
+          .join('\n')
+      : groundingFromCalls?.sources?.length
+        ? groundingFromCalls.sources
+            .map((s) => (s?.uri ? `- ${s.uri}${s.title ? ` (title: ${s.title})` : ''}` : null))
+            .filter(Boolean)
+            .join('\n')
+        : 'No URL metadata collected.'
+
+    if (debugMode) {
+      console.log('[agent-runner] REFINE url contexts:', JSON.stringify(aggregatedUrlContexts))
+      console.log('[agent-runner] REFINE grounding sources:', JSON.stringify(groundingFromCalls?.sources || []))
+    }
+
+    const refineChat = ai.chats.create({
+      model: refineModel,
+      config: {
+        systemInstruction: buildSystemInstruction('refine'),
+        thinkingConfig: baseThinking,
+      },
+    })
+
+    const originalUserText = extractOriginalUserText(contents)
+    const refinePrompt = [
+      `=== CURRENT DATE ===`,
+      `Today's date: ${currentDate}`,
+      '',
+      'URL context metadata collected in FINAL:',
+      formattedUrls,
+      '',
+      '=== PRIOR FINAL ANSWER ===',
+      lastAssistantText ? lastAssistantText : '(No final answer text available)',
+      '',
+      '=== ORIGINAL USER REQUEST ===',
+      originalUserText ? originalUserText : '(No user request text available)',
+      '',
+      refineTurnPrompt,
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    refineResult = await streamOnce({
+      chat: refineChat,
+      message: toUserContent(refinePrompt),
+      socket,
+      chatId,
+      requestId,
+      step: 'refine',
+      debugLog: debugMode,
+      collectUrlContextMetadata: true,
+      collectAnswerText: true,
+      groundingAcc,
+      config: { tools: [{ urlContext: {} }], thinkingConfig: baseThinking, topP: 0.2 },
+    })
+    accumulateFromCalls(groundingAcc, refineResult.functionCalls)
+    tokenUsage.refine = refineResult.usageMetadata
+    if (refineResult.urlContextMetadata?.urlContexts?.length) {
+      allUrlContexts = mergeUrlContexts(allUrlContexts, refineResult.urlContextMetadata.urlContexts)
+    }
+  }
 
   // Print total token usage summary with breakdown when debugging
   if (debugMode) {
@@ -757,13 +942,15 @@ export async function runAgentSession({
     const clarifyTotal = sumTokens(tokenUsage.clarify)
     const planTotal = sumTokens(tokenUsage.plan)
     const finalTotal = sumTokens(tokenUsage.final)
-    const grandTotal = precheckTotal + clarifyTotal + planTotal + finalTotal
+    const refineTotal = sumTokens(tokenUsage.refine)
+    const grandTotal = precheckTotal + clarifyTotal + planTotal + finalTotal + refineTotal
 
     const allMetadata = [
       tokenUsage.precheck,
       tokenUsage.clarify,
       tokenUsage.plan,
       tokenUsage.final,
+      tokenUsage.refine,
     ].filter(Boolean)
 
     const totalPrompt = allMetadata.reduce((sum, m) => sum + sumPrompt(m), 0)
@@ -775,6 +962,7 @@ export async function runAgentSession({
     console.log(`CLARIFY:    ${clarifyTotal.toLocaleString()} tokens`)
     console.log(`PLAN:       ${planTotal.toLocaleString()} tokens`)
     console.log(`FINAL:      ${finalTotal.toLocaleString()} tokens`)
+    console.log(`REFINE:     ${refineTotal.toLocaleString()} tokens`)
     console.log(`───────────────────────────────────────`)
     console.log(`TOTAL:      ${grandTotal.toLocaleString()} tokens`)
     console.log(``)
@@ -786,11 +974,38 @@ export async function runAgentSession({
     console.log('==========================================\n')
   }
 
+  const mergedUrlContextMetadata = (() => {
+    const finalMeta = finalResult.urlContextMetadata
+    const refineMeta = refineResult?.urlContextMetadata
+    const mergedMeta = []
+    if (Array.isArray(allUrlContexts) && allUrlContexts.length) {
+      mergedMeta.push(...allUrlContexts)
+    }
+    if (finalMeta?.urlContexts?.length) {
+      mergedMeta.push(...finalMeta.urlContexts)
+    }
+    if (refineMeta?.urlContexts?.length) {
+      mergedMeta.push(...refineMeta.urlContexts)
+    }
+    const merged = mergeUrlContexts([], mergedMeta)
+    if (merged.length) return { urlContexts: merged }
+    // Fallback: convert groundingAcc sources when urlContexts missing
+    const groundingFallback = buildGroundingMetadata(groundingAcc)
+    if (groundingFallback?.sources?.length) {
+      const fallback = groundingFallback.sources
+        .map((s) => (s?.uri ? { uri: s.uri, title: s.title || null } : null))
+        .filter(Boolean)
+      const mergedFallback = mergeUrlContexts([], fallback)
+      return mergedFallback.length ? { urlContexts: mergedFallback } : null
+    }
+    return null
+  })()
+
   socket.emit('end_generation', {
     ok: true,
     chatId,
     requestId,
-    urlContextMetadata: finalResult.urlContextMetadata || null,
+    urlContextMetadata: mergedUrlContextMetadata,
     grounding: buildGroundingMetadata(groundingAcc),
   })
 }
