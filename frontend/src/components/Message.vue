@@ -55,10 +55,7 @@
             @click="group.system.hasThoughts && toggleThoughts()"
           >
             <div class="status-icon" :class="{ streaming: isStreaming }">
-              <font-awesome-icon
-                :icon="isStreaming ? 'circle-notch' : ['far', 'circle']"
-                :spin="isStreaming"
-              />
+              <span class="duration-text">{{ durationDisplay }}</span>
             </div>
             <div class="system-summary">
               <template v-if="group.system.indicators.length">
@@ -179,7 +176,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onUnmounted, watch } from 'vue'
+import { computed, ref, onUnmounted, watch, onMounted } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { useDisplayStore } from '../stores/display'
 import CodeBlock from './CodeBlock.vue'
@@ -277,7 +274,80 @@ const defaultSystemSummary = computed(() => {
 const copyIcon = ref('copy')
 const blobUrlCache = new Map()
 
+// Duration Timer Logic
+const elapsedTime = ref(0)
+let timerInterval = null
+
+const formatDuration = (ms) => {
+  if (typeof ms !== 'number' || isNaN(ms)) return '- s'
+  const totalSeconds = ms / 1000
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`
+  }
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = Math.floor(totalSeconds % 60)
+  return `${minutes}m ${seconds}s`
+}
+
+const durationDisplay = computed(() => {
+  if (isStreaming.value) {
+    return formatDuration(elapsedTime.value)
+  }
+  const duration = props.group.message?.metadata?.duration
+  if (duration !== undefined && duration !== null) {
+    return formatDuration(duration)
+  }
+  return '- s'
+})
+
+const updateTimer = () => {
+  const createdAt = props.group.message?.createdAt
+  if (createdAt) {
+    elapsedTime.value = Date.now() - createdAt
+  }
+}
+
+const startTimer = () => {
+  if (timerInterval) clearInterval(timerInterval)
+  updateTimer()
+  timerInterval = setInterval(updateTimer, 100)
+}
+
+const stopTimer = () => {
+  if (timerInterval) {
+    clearInterval(timerInterval)
+    timerInterval = null
+  }
+}
+
+watch(
+  isStreaming,
+  (streaming) => {
+    if (streaming) {
+      startTimer()
+    } else {
+      stopTimer()
+    }
+  },
+  { immediate: true }
+)
+
+onMounted(() => {
+  if (isStreaming.value) {
+    startTimer()
+  }
+})
+
+onUnmounted(() => {
+  stopTimer()
+  for (const [, url] of blobUrlCache.entries()) {
+    URL.revokeObjectURL(url)
+  }
+  blobUrlCache.clear()
+})
+
 const releaseStaleAttachmentUrls = (attachments) => {
+
   const nextIds = new Set()
   for (const att of attachments || []) {
     if (att?.id && att.blob) {
@@ -469,15 +539,28 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  width: auto;
+  min-width: 24px;
   height: 24px;
-  border-radius: 9999px;
-  color: var(--primary-color);
-  font-size: 16px;
+  padding: 0 6px;
+  border-radius: 12px;
+  color: var(--text-light);
+  font-size: 11px;
+  font-family: monospace;
+  background-color: var(--bg-gray);
+  transition:
+    color 0.2s,
+    background-color 0.2s;
 }
 
 .status-icon.streaming {
-  color: var(--primary-color);
+  color: var(--text-light);
+  background-color: transparent;
+}
+
+.duration-text {
+  white-space: nowrap;
+  font-weight: 500;
 }
 
 .thought-stream {

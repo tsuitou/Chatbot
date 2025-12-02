@@ -627,6 +627,12 @@ export const useChatStore = defineStore('chat', {
         message.metadata = {
           ...message.metadata,
           finishReason: result.finishReason,
+          duration: Date.now() - message.createdAt,
+        }
+      } else {
+        message.metadata = {
+          ...message.metadata,
+          duration: Date.now() - message.createdAt,
         }
       }
 

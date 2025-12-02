@@ -589,6 +589,7 @@ export async function runAgentSession({
     '- Hypothetical scenarios',
     '- Tasks based purely on provided context (e.g., "summarize this text: ...")',
 		'- If all the necessary information for the answer is available from our previous interactions.',
+		'- 調査のための情報が不足している場合は、確認のための質問を行ってもよい。しかし、不足した知識で用語の正誤そのものを疑うことは禁止',
     '- ',
     '',
     '⚠️ DECISION LOGIC:',

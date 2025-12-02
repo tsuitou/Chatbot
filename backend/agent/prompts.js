@@ -111,7 +111,7 @@ export const agentAddendumPlan = [
   '',
   'Must do:',
   '- Treat CLARIFY_OUTPUT as real search results already executed, not simulated text.',
-  '- You may run googleSearch/urlContext to identify targets and validate scope, but do NOT extract or output facts; save all fact-finding for FINAL.',
+  '- googleSearch (concise_search) やurlContext (browse) を使用して、FINALで回答を行うための基礎となる調査を完了させる。FINALが行うのはその追加調査のみであることを意識する',
   '- Identify what FINAL must look up (queries, targets, sources) and why each matters.',
   '- Output only inside <PLAN_OUTPUT>...</PLAN_OUTPUT>.',
   '- Include sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, ANSWER_GUIDE, FACT_RELATIONSHIPS, CONSISTENT_FACTS, RESEARCH_PLAN, UNCERTAIN_ITEMS.',
@@ -253,6 +253,7 @@ export const finalTurnPrompt = [
  '回答の初めに、絶対に専用のセクションを作成してCLARIFY, PLANそれぞれで明確にされた事実の列挙を必ず行ってください。特に、用語・関係性(無関係性)を専門的な詳細も含めて必ず明確にすること',
  'これまでの調査内容を絶対に尊重して、安易で愚かな判断を行わないこと。特に、事実と推測の分離を必ず念頭において、明記を行うこと。正確な情報から順に事実を明記し、堅牢な足場を築く',
  '以前の調査段階での懸念点を必ず解消する。無視はするな',
+ '必ずgoogleSearch (concise_search) と urlContext (browse) を使用してPLANの計画に沿って調査を行い、調査を完了させる',
 ].join('\n')
 
 export const finalSystemInstruction = [
@@ -269,6 +270,7 @@ export const finalSystemInstruction = [
 export const refineTurnPrompt = [
   'あなたの役目は、高速なモデルが調査を行って生成した回答を精査して、より完璧な応答を生成することです。ユーザーにはあなたの出力だけが表示されます。従って、草稿の引用は不可能です。必要な情報は改めて明示的に出力する必要があります',
 	'与えられた草稿を基に、URLで引用を精査して、より充実した完璧な報告書を作成してください',
+	'ユーザーのプロンプトを吟味して、先回りして注意点の提示やトラブルシューティングの情報を盛り込み、補足的な説明を付して、調査内容を最大限盛り込むこと',
 	'元の草稿の体裁を完全に維持した上で、より正確で、情報量の多い報告書を作成する必要があります。',
 	'最終的な出力は、ORIGINAL USER REQUESTに対する回答として生成してください',
 	'URLの形式を疑う必要はありません。それはAIが利用するためのリダイレクトリンクで、brwseツールでそのまま取得できます'
