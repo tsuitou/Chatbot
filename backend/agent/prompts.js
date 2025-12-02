@@ -108,14 +108,16 @@ export const agentAddendumClarify = [
 export const agentAddendumPlan = [
   '=== PLAN STEP: RESEARCH AND OUTLINE ===',
   '',
-  'Goal: trust CLARIFY_OUTPUT, infer context, and design the research/answer outline. Do NOT answer the user. Do NOT run tools in this step.',
+  'Goal: trust CLARIFY_OUTPUT, infer context, and design the research/answer outline. Do NOT answer the user.',
   '',
   'Must do:',
+  '- Call googleSearch (concise_search) and/or urlContext (browse) at least once to conduct foundational research.',
   '- Treat CLARIFY_OUTPUT as real search results already executed, not simulated text.',
   '- googleSearch (concise_search) やurlContext (browse) を使用して、FINALで回答を行うための基礎となる調査を完了させる。FINALが行うのはその追加調査のみであることを意識する',
   '- Identify what FINAL must look up (queries, targets, sources) and why each matters.',
   '- Output only inside <PLAN_OUTPUT>...</PLAN_OUTPUT>.',
-  '- Include sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, ANSWER_GUIDE, FACT_RELATIONSHIPS, CONSISTENT_FACTS, RESEARCH_PLAN, UNCERTAIN_ITEMS.',
+  '- Include sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, ANSWER_GUIDE, FACT_RELATIONSHIPS, CONSISTENT_FACTS, RESEARCH_PLAN, PAGES_FOR_FINAL, UNCERTAIN_ITEMS.',
+  '- PAGES_FOR_FINAL must list the specific web page titles that FINAL should fetch and analyze, based on search results in this step.',
   '- ANSWER_GUIDE must name what to answer (primary deliverables) and the secondary angles to include (high-level, not detailed).',
   '- RESEARCH_PLAN should list the searches/pages FINAL must perform→fetch, with intent and priority.',
   '- In ANSWER_GUIDE, mandate that FINAL begins the answer with explicit lists of researched facts and assumptions/conditions before any other content.',
@@ -148,6 +150,12 @@ export const agentAddendumPlan = [
   '  Priority: [high/med/low]',
   '  Notes: [why it matters]',
   '',
+  'PAGES_FOR_FINAL:',
+  '- [Page title or description]',
+  '  Priority: [high/med/low]',
+  '  Purpose: [what specific information FINAL should extract]',
+  '  Source: [search query that found this page]',
+  '',
   'CONSISTENT_FACTS:',
   '- [facts already established that must stay consistent in FINAL]',
   '  Notes: [source or confidence, and what to re-verify if needed]',
@@ -174,9 +182,9 @@ export const searchPolicyInstruction = [
   '- 多言語での情報収集を意識する (例：日本語入力に関して → 2バイト文字共通の可能性) どの国のネット上に情報がありそうか、を検討して、クエリを様々に組み立てる',
   '',
   'Tool strategy by step:',
-  '- CLARIFY: search to verify names/versions.',
-  '- PLAN: run searches to identify targets/queries; do not extract or output facts.',
-  '- FINAL: if gaps remain, use googleSearch (concise_search) and urlContext (browse) to gather facts; keep URLs out of the final response.',
+  '- CLARIFY: must search to verify names/versions.',
+  '- PLAN: must run searches to conduct foundational research and identify targets/queries for FINAL.',
+  '- FINAL: must use googleSearch (concise_search) and urlContext (browse) to complete remaining research and gather facts; keep URLs out of the final response.',
 ].join('\n')
 
 export const criticalAgentRules = [
@@ -234,7 +242,7 @@ export const planTurnPrompt = [
   'Format discipline:',
   '- Allowed tags: <PLAN_OUTPUT> only (plus Thinking Process trigger line).',
   '- Inside PLAN_OUTPUT, sections are plain text headings and bullet items (no nested tags).',
-  'Trust CLARIFY_OUTPUT (real searches, correct as of that step). You may run googleSearch/urlContext to identify targets, but do NOT extract or output facts.',
+  'Trust CLARIFY_OUTPUT (real searches, correct as of that step). You must run googleSearch/urlContext at least once to conduct foundational research and identify targets.',
   'Scope: design the research and answer outline so FINAL can execute searches and write the answer.',
   'Mid-thought check: pause and ask “Wait, is this correct?”; if an item is uncertain, label it as an assumption for FINAL to verify.',
 	'OUTDATED_FOR_PERIODはあくまで情報取得の日付についての情報であり、事実が失われているわけではない。これを意識してCONSISTENT_FACTSを作成すること',
@@ -244,7 +252,8 @@ export const planTurnPrompt = [
   'CONSISTENT_FACTSは最重要事項であり、ここに書かれていない事実は上書きされうる。必ず関係性の有無を把握して惑わされずに情報を維持すること',
   '公式に記述がある/ネット上に情報がある この二つを明確に区別して、必ず何の記述に基づくかを明記する',
   'Mark deprecated/obsolete guidance and note freshness-sensitive items that FINAL must check.',
-  'Sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, ANSWER_GUIDE, FACT_RELATIONSHIPS, CONSISTENT_FACTS, RESEARCH_PLAN, UNCERTAIN_ITEMS.',
+  'Collect page titles from your search results and list them in PAGES_FOR_FINAL with clear purposes for FINAL to fetch.',
+  'Sections: VERIFIED_TECHNOLOGIES, CONTEXT_INFERENCE, ANSWER_GUIDE, FACT_RELATIONSHIPS, CONSISTENT_FACTS, RESEARCH_PLAN, PAGES_FOR_FINAL, UNCERTAIN_ITEMS.',
   'Your own background may be stale; be humble and lean on CLARIFY_OUTPUT and sources provided.',
   'Do NOT override or doubt provided notes; accept them and pass needed checks to FINAL as research tasks.',
   'Ensure ANSWER_GUIDE directs FINAL to begin the answer by listing researched facts and explicit assumptions/conditions before the main content.',
@@ -254,6 +263,7 @@ export const finalTurnPrompt = [
  '回答の初めに、絶対に専用のセクションを作成してCLARIFY, PLANそれぞれで明確にされた事実の列挙を必ず行ってください。特に、用語・関係性(無関係性)を専門的な詳細も含めて必ず明確にすること',
  'これまでの調査内容を絶対に尊重して、安易で愚かな判断を行わないこと。特に、事実と推測の分離を必ず念頭において、明記を行うこと。正確な情報から順に事実を明記し、堅牢な足場を築く',
  '以前の調査段階での懸念点を必ず解消する。無視はするな',
+ 'Reference PAGES_FOR_FINAL from PLAN_OUTPUT and fetch those page titles with urlContext (browse) to extract the required information.',
  '必ずgoogleSearch (concise_search) と urlContext (browse) を使用してPLANの計画に沿って調査を行い、調査を完了させる',
 ].join('\n')
 
@@ -274,5 +284,6 @@ export const refineTurnPrompt = [
 	'ユーザーのプロンプトを吟味して、先回りして注意点の提示やトラブルシューティングの情報を盛り込み、補足的な説明を付して、調査内容を最大限盛り込むこと',
 	'元の草稿の体裁を完全に維持した上で、より正確で、情報量の多い報告書を作成する必要があります。',
 	'最終的な出力は、ORIGINAL USER REQUESTに対する回答として生成してください',
-	'URLの形式を疑う必要はありません。それはAIが利用するためのリダイレクトリンクで、brwseツールでそのまま取得できます'
+	'URLの形式を疑う必要はありません。それはAIが利用するためのリダイレクトリンクで、brwseツールでそのまま取得できます',
+	'必ず最終的な応答を出力してください'
 ].join('\n')
