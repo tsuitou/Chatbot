@@ -6,34 +6,37 @@ import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
 import readline from 'readline'
+import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { runAgentSession } from './agent/runner.js'
 
-// --- Environment Loading ---
-const runtimeFilename = typeof __filename === 'string'
-  ? __filename
-  : (process.argv[1] ? path.resolve(process.argv[1]) : process.execPath)
-const runtimeDirname = typeof __dirname === 'string'
-  ? __dirname
-  : path.dirname(runtimeFilename)
+// --- Path Helpers ---
+const runtimeFilename = fileURLToPath(import.meta.url)
+const runtimeDirname = path.dirname(runtimeFilename)
+const projectRoot = path.resolve(runtimeDirname, '..')
+
+const baseDirs = Array.from(new Set([runtimeDirname, projectRoot, process.cwd()]))
+
+const resolveFirstExisting = (relativePath, type = 'file') => {
+  for (const dir of baseDirs) {
+    const candidate = path.resolve(dir, relativePath)
+    try {
+      const stat = fs.statSync(candidate)
+      if (type === 'dir' ? stat.isDirectory() : stat.isFile()) return candidate
+    } catch {}
+  }
+  return null
+}
 
 function resolveEnvPath() {
   if (process.env.APP_ENV_FILE) {
-    return process.env.APP_ENV_FILE
+    return path.isAbsolute(process.env.APP_ENV_FILE)
+      ? process.env.APP_ENV_FILE
+      : path.resolve(process.cwd(), process.env.APP_ENV_FILE)
   }
 
-  const cwdCandidate = path.resolve(process.cwd(), 'backend.env')
-  if (fs.existsSync(cwdCandidate)) {
-    return cwdCandidate
-  }
-
-  const siblingCandidate = path.resolve(runtimeDirname, 'backend.env')
-  if (fs.existsSync(siblingCandidate)) {
-    return siblingCandidate
-  }
-
-  return null
+  return resolveFirstExisting('backend.env', 'file')
 }
 
 const envPath = resolveEnvPath()
@@ -50,15 +53,8 @@ let defaultSystemInstruction;
 
 function reloadConfig() {
   defaultSystemInstruction = process.env.DEFAULT_SYSTEM_INSTRUCTION ?? (() => {
-    const candidate = path.resolve(process.cwd(), 'system_instruction.txt')
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, 'utf-8')
-    }
-    const sibling = path.resolve(runtimeDirname, 'system_instruction.txt')
-    if (fs.existsSync(sibling)) {
-      return fs.readFileSync(sibling, 'utf-8')
-    }
-    return undefined
+    const candidate = resolveFirstExisting('system_instruction.txt', 'file')
+    return candidate ? fs.readFileSync(candidate, 'utf-8') : undefined
   })()
   console.log('Config reloaded.')
 }
@@ -68,11 +64,16 @@ reloadConfig();
 const app = express()
 
 // --- Static Frontend ---
-const staticDir = path.join(runtimeDirname, 'dist')
-app.use('/chatbot', express.static(staticDir))
-app.get(/^\/chatbot(?:\/.*)?$/, (_req, res) => {
-  res.sendFile(path.join(staticDir, 'index.html'))
-})
+const staticDir = resolveFirstExisting('dist', 'dir') || resolveFirstExisting(path.join('frontend', 'dist'), 'dir')
+if (staticDir) {
+  app.use('/chatbot', express.static(staticDir))
+  app.get(/^\/chatbot(?:\/.*)?$/, (_req, res) => {
+    res.sendFile(path.join(staticDir, 'index.html'))
+  })
+  console.log(`Serving static assets from ${staticDir}`)
+} else {
+  console.warn('No static frontend dist directory found. Skipping static asset hosting.')
+}
 
 // CORS: production whitelist if ALLOWED_ORIGINS is empty, allow all (dev)
 const allowed = (process.env.ALLOWED_ORIGINS || '')
@@ -100,43 +101,39 @@ function resolveApiKey() {
   if (envKey) return envKey
 
   // First check for key_valid files
-  const validCandidatePaths = [
-    path.resolve(process.cwd(), 'key_valid'),
-    path.resolve(runtimeDirname, 'key_valid'),
-  ]
+  const validCandidatePaths = Array.from(new Set([
+    resolveFirstExisting('key_valid', 'file'),
+    resolveFirstExisting(path.join('backend', 'key_valid'), 'file'),
+  ].filter(Boolean)))
 
   for (const keyPath of validCandidatePaths) {
     try {
-      if (fs.existsSync(keyPath)) {
-        const raw = fs.readFileSync(keyPath, 'utf-8').trim()
-        if (raw) return raw
-      }
+      const raw = fs.readFileSync(keyPath, 'utf-8').trim()
+      if (raw) return raw
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
     }
   }
 
   // Then check for regular key files and rename them if they contain valid keys
-  const candidatePaths = [
-    path.resolve(process.cwd(), 'key'),
-    path.resolve(runtimeDirname, 'key'),
-  ]
+  const candidatePaths = Array.from(new Set([
+    resolveFirstExisting('key', 'file'),
+    resolveFirstExisting(path.join('backend', 'key'), 'file'),
+  ].filter(Boolean)))
 
   for (const keyPath of candidatePaths) {
     try {
-      if (fs.existsSync(keyPath)) {
-        const raw = fs.readFileSync(keyPath, 'utf-8').trim()
-        if (raw && raw.length > 10) { // Basic check for non-empty key
-          // Rename key to key_valid to prevent accidental distribution
-          const validKeyPath = keyPath.replace(/key$/, 'key_valid')
-          try {
-            fs.renameSync(keyPath, validKeyPath)
-            console.log(`Renamed ${path.basename(keyPath)} to ${path.basename(validKeyPath)} for security`)
-          } catch (renameError) {
-            console.warn(`Could not rename key file: ${renameError.message}`)
-          }
-          return raw
+      const raw = fs.readFileSync(keyPath, 'utf-8').trim()
+      if (raw && raw.length > 10) { // Basic check for non-empty key
+        // Rename key to key_valid to prevent accidental distribution
+        const validKeyPath = keyPath.replace(/key$/, 'key_valid')
+        try {
+          fs.renameSync(keyPath, validKeyPath)
+          console.log(`Renamed ${path.basename(keyPath)} to ${path.basename(validKeyPath)} for security`)
+        } catch (renameError) {
+          console.warn(`Could not rename key file: ${renameError.message}`)
         }
+        return raw
       }
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
@@ -155,7 +152,8 @@ const filterKeywords = (process.env.MODEL_FILTER || '').split(',')
 const connectionInfo = {}
 
 // Initialize Provider
-const geminiProvider = new GeminiProvider(apiKey, defaultSystemInstruction);
+const capabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
+const geminiProvider = new GeminiProvider(apiKey, defaultSystemInstruction, { capabilitiesPath });
 
 const DUMMY_MODEL_NAME = 'dummy'
 
@@ -171,9 +169,10 @@ const isAgentModel = (modelName) => modelName in AGENT_MODELS
 const getAgentBaseModel = (modelName) => AGENT_MODELS[modelName]
 
 // Ensure uploads dir exists for Multer temp files
-fs.mkdirSync('uploads', { recursive: true })
+const uploadsDir = path.resolve(runtimeDirname, 'uploads')
+fs.mkdirSync(uploadsDir, { recursive: true })
 
-const upload = multer({ dest: 'uploads/' })
+const upload = multer({ dest: uploadsDir })
 
 // --- Helpers ---
 const normalizeModelName = (name) => (name || '').replace(/^models\//, '')

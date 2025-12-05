@@ -1,20 +1,18 @@
 import { GoogleGenAI } from '@google/genai'
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 
-const runtimeFilename = typeof __filename === 'string'
-  ? __filename
-  : (process.argv[1] ? path.resolve(process.argv[1]) : process.execPath)
-const runtimeDirname = typeof __dirname === 'string'
-  ? __dirname
-  : path.dirname(runtimeFilename)
+const runtimeFilename = fileURLToPath(import.meta.url)
+const runtimeDirname = path.dirname(runtimeFilename)
 
-function loadCapabilities() {
+function loadCapabilities(explicitPath) {
   const candidates = [
+    explicitPath,
     path.resolve(process.cwd(), 'backend/capabilities/gemini.json'),
     path.resolve(process.cwd(), 'capabilities/gemini.json'), // If cwd is backend/
     path.resolve(runtimeDirname, '../capabilities/gemini.json') // Relative to provider file
-  ];
+  ].filter(Boolean);
 
   for (const capPath of candidates) {
     try {
@@ -30,10 +28,11 @@ function loadCapabilities() {
 }
 
 export class GeminiProvider {
-  constructor(apiKey, systemInstruction) {
+  constructor(apiKey, systemInstruction, options = {}) {
+    const { capabilitiesPath } = options
     this.genAI = new GoogleGenAI({ apiKey })
     this.defaultSystemInstruction = systemInstruction
-    this.capabilities = loadCapabilities();
+    this.capabilities = loadCapabilities(capabilitiesPath);
   }
 
   setDefaultSystemInstruction(systemInstruction) {
