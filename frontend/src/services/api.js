@@ -1,6 +1,8 @@
 import axios from 'axios'
 import axiosRetry from 'axios-retry'
 
+const DEFAULT_API_PATH = '/chatbot/api'
+
 const resolveApiBaseUrl = () => {
   const raw = import.meta.env?.VITE_API_BASE_URL
   if (typeof raw === 'string' && raw.trim().length > 0) {
@@ -9,10 +11,10 @@ const resolveApiBaseUrl = () => {
 
   if (typeof window !== 'undefined' && window.location?.origin) {
     const origin = window.location.origin.replace(/\/+$/, '')
-    return `${origin}/api`
+    return `${origin}${DEFAULT_API_PATH}`
   }
 
-  return '/api'
+  return DEFAULT_API_PATH
 }
 
 const apiClient = axios.create({

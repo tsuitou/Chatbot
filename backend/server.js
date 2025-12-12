@@ -11,6 +11,14 @@ import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { runAgentSession } from './agent/runner.js'
 
+const normalizeBasePath = (raw) => {
+  if (!raw || typeof raw !== 'string') return '/chatbot'
+  const trimmed = raw.trim()
+  const withLeading = trimmed.startsWith('/') ? trimmed : `/${trimmed}`
+  return withLeading.replace(/\/+$/, '') || '/chatbot'
+}
+const escapeForRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 // --- Path Helpers ---
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
@@ -48,6 +56,10 @@ if (envPath) {
   console.log('Loaded environment from process.env (no external backend.env found).')
 }
 
+const BASE_PATH = normalizeBasePath(process.env.BASE_PATH)
+const API_PREFIX = `${BASE_PATH}/api`
+const SOCKET_PATH = `${BASE_PATH}/socket.io`
+
 // --- Config Loading ---
 let defaultSystemInstruction;
 
@@ -62,18 +74,6 @@ function reloadConfig() {
 // --- Init ---
 reloadConfig();
 const app = express()
-
-// --- Static Frontend ---
-const staticDir = resolveFirstExisting('dist', 'dir') || resolveFirstExisting(path.join('frontend', 'dist'), 'dir')
-if (staticDir) {
-  app.use('/chatbot', express.static(staticDir))
-  app.get(/^\/chatbot(?:\/.*)?$/, (_req, res) => {
-    res.sendFile(path.join(staticDir, 'index.html'))
-  })
-  console.log(`Serving static assets from ${staticDir}`)
-} else {
-  console.warn('No static frontend dist directory found. Skipping static asset hosting.')
-}
 
 // CORS: production whitelist if ALLOWED_ORIGINS is empty, allow all (dev)
 const allowed = (process.env.ALLOWED_ORIGINS || '')
@@ -93,7 +93,7 @@ const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: { origin: allowed.length ? allowed : '*' },
   maxHttpBufferSize: 50 * 1024 * 1024,
-  path: '/chatbot/socket.io',
+  path: SOCKET_PATH,
 })
 
 function resolveApiKey() {
@@ -183,12 +183,13 @@ const numberOr = (v, fallback) => {
 const updateConnectionInfo = (id, newStatus)  => ( newStatus === 'disconnect' ? delete connectionInfo[id] : connectionInfo[id] = { status: newStatus }  )
 
 // --- HTTP API ---
+const apiRouter = express.Router()
 
-// Health check
-app.get('/healthz', (_req, res) => res.json({ ok: true }))
+// Health check under BASE_PATH
+app.get(`${BASE_PATH}/healthz`, (_req, res) => res.json({ ok: true }))
 
 // List models
-app.get('/api/models', async (_req, res) => {
+apiRouter.get('/models', async (_req, res) => {
   try {
     const names = await geminiProvider.listModels(filterKeywords);
     if (!names.includes(DUMMY_MODEL_NAME)) names.unshift(DUMMY_MODEL_NAME);
@@ -206,7 +207,7 @@ app.get('/api/models', async (_req, res) => {
 })
 
 // Get default model name (plain text). Prefer .env DEFAULT_MODEL
-app.get('/api/models/default', async (_req, res) => {
+apiRouter.get('/models/default', async (_req, res) => {
   try {
     const configured = process.env.DEFAULT_MODEL
     if (configured) {
@@ -221,7 +222,7 @@ app.get('/api/models/default', async (_req, res) => {
 })
 
 // Get configurable ranges for a given model
-app.get('/api/models/:modelName/config-ranges', async (req, res) => {
+apiRouter.get('/models/:modelName/config-ranges', async (req, res) => {
   try {
     const { modelName } = req.params
     if (normalizeModelName(modelName) === DUMMY_MODEL_NAME) {
@@ -241,7 +242,7 @@ app.get('/api/models/:modelName/config-ranges', async (req, res) => {
 })
 
 // Upload file via Files API
-app.post('/api/files/upload', upload.single('file'), async (req, res) => {
+apiRouter.post('/files/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.', message: 'No file uploaded.' })
 
   try {
@@ -255,6 +256,21 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     res.status(status).json({ error: 'Failed to process file', message: error?.message })
   }
 })
+
+app.use(API_PREFIX, apiRouter)
+
+// --- Static Frontend ---
+const staticDir = resolveFirstExisting('dist', 'dir') || resolveFirstExisting(path.join('frontend', 'dist'), 'dir')
+if (staticDir) {
+  app.use(BASE_PATH, express.static(staticDir))
+  const basePathPattern = new RegExp(`^${escapeForRegex(BASE_PATH)}(?:/(?!api)(.*))?$`)
+  app.get(basePathPattern, (_req, res) => {
+    res.sendFile(path.join(staticDir, 'index.html'))
+  })
+  console.log(`Serving static assets from ${staticDir} at ${BASE_PATH}`)
+} else {
+  console.warn('No static frontend dist directory found. Skipping static asset hosting.')
+}
 
 // --- Socket.IO for generation ---
 io.on('connection', (socket) => {
@@ -355,7 +371,8 @@ rl.on('line', (input) => {
 
 // --- Start server ---
 const PORT = process.env.PORT || 15101
-httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`)
+const HOST = process.env.HOST || '0.0.0.0'
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Server running on http://${HOST}:${PORT}${BASE_PATH}`)
 	console.log('Type "rs" and press Enter to reload config.');
 })
