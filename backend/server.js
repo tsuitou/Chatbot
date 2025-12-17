@@ -221,10 +221,11 @@ apiRouter.get('/models/default', async (_req, res) => {
   }
 })
 
-// Get configurable ranges for a given model
-apiRouter.get('/models/:modelName/config-ranges', async (req, res) => {
+// Get configurable ranges for a given model.
+// Use a regex route so model names may include slashes (e.g. "publishers/.../models/...").
+apiRouter.get(/^\/models\/(.+)\/config-ranges$/, async (req, res) => {
   try {
-    const { modelName } = req.params
+    const modelName = req.params[0]
     if (normalizeModelName(modelName) === DUMMY_MODEL_NAME) {
       return res.json({
         temperature: { min: 0.0, max: 0.0 },
