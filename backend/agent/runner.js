@@ -1,58 +1,21 @@
 import { GoogleGenAI } from '@google/genai'
 import {
   agentAddendumClarify,
-  agentAddendumPlan,
+  agentFormatRules,
   agentPersonaInstruction,
   clarifyTurnPrompt,
   criticalAgentRules,
   finalTurnPrompt,
-  finalSystemInstruction,
   flowInstruction,
   commonAgentPolicies,
-  planTurnPrompt,
   searchPolicyInstruction,
-  refineTurnPrompt,
+  buildPlanPrompt,
 } from './prompts.js'
 
 // Track the last emitted step to add breathing room between phases
 let lastEmittedStep = null
 
-// Mandatory instruction injected into user prompts to keep grounding consistent and hide URLs
-const mandatoryFinalUrlInstruction =
-  'MANDATORY: Ground final answers in urlContext (google_browse) results for any fetched URLs. Do not include raw URLs in the response. If URLs cannot be fetched, state the failure and avoid answering from memory.'
-
-// Build urlContextMetadata from groundingMetadata if present
-function buildUrlContextMetadata(meta) {
-  if (!meta || typeof meta !== 'object') return null
-  if (meta.urlContextMetadata) return meta.urlContextMetadata
-  if (Array.isArray(meta.urlContexts)) return { urlContexts: meta.urlContexts }
-  if (Array.isArray(meta.groundingChunks)) {
-    const urlContexts = meta.groundingChunks
-      .map((chunk) => ({
-        uri: chunk?.web?.uri,
-        title: chunk?.web?.title,
-        passages: chunk?.web?.passages,
-      }))
-      .filter((c) => c.uri)
-    if (urlContexts.length) return { urlContexts }
-  }
-  return null
-}
-
-// Convert urlContextMetadata (urlContexts array) into grounding-like shape for frontend consumption
-function groundingFromUrlContext(urlContextMetadata) {
-  if (!urlContextMetadata || !Array.isArray(urlContextMetadata.urlContexts)) return null
-  const groundingChunks = urlContextMetadata.urlContexts
-    .map((c) => {
-      const uri = c?.uri || c?.url || c?.webPage?.uri || c?.webPage?.url
-      const title = c?.title || c?.webPage?.title || null
-      return uri ? { web: { uri, title: title || '(no title)' } } : null
-    })
-    .filter(Boolean)
-  if (!groundingChunks.length) return null
-  return { groundingChunks }
-}
-
+// NOTE: Do not auto-inject URL-related instructions into user prompts.
 // Convert Gemini parts into thoughts/answer friendly chunks for the frontend.
 function emitContentParts({
   parts = [],
@@ -63,10 +26,12 @@ function emitContentParts({
   forceThoughts = false,
   forceAnswer = false,
   debugLog = false,
-  urlContextMetadata = null,
+  grounding = null,
 }) {
   if (!socket) return
-  const allowEmptyPart = step === 'final' && urlContextMetadata
+  // IMPORTANT: allow metadata-only chunks on FINAL so the frontend can receive grounding even
+  // when the model emits it in a chunk without text parts.
+  const allowEmptyPart = step === 'final' && grounding && typeof grounding === 'object'
   const baseParts = parts || []
   const shapedParts = []
 
@@ -100,27 +65,17 @@ function emitContentParts({
     }
 
     shapedParts.push({ text, thought: thoughtFlag })
-    if (debugLog) {
-      console.debug(
-        '[agent-debug] part text:',
-        JSON.stringify(part.text),
-        'thought:',
-        thoughtFlag,
-        'step:',
-        step
-      )
-    }
+
   }
 
-  if (!shapedParts.length && allowEmptyPart) {
+  if (!shapedParts.length) {
+    if (!allowEmptyPart) return shapedParts
     shapedParts.push({ text: '', thought: !!forceThoughts && !forceAnswer })
   }
 
-  if (!shapedParts.length) return shapedParts
-
   lastEmittedStep = step
 
-  // Only emit urlContextMetadata on FINAL
+  // Match backend/providers/gemini.js: emit groundingMetadata as `grounding` (when present).
   const chunkPayload = {
     chatId,
     requestId,
@@ -128,12 +83,8 @@ function emitContentParts({
     parts: shapedParts,
     provider: 'gemini',
   }
-  if (step === 'final' && urlContextMetadata) {
-    const grounding = groundingFromUrlContext(urlContextMetadata)
-    if (grounding) {
-      chunkPayload.grounding = grounding
-    }
-    chunkPayload.urlContextMetadata = urlContextMetadata
+  if (step === 'final' && grounding && typeof grounding === 'object') {
+    chunkPayload.grounding = grounding
   }
   socket.emit('chunk', chunkPayload)
   return shapedParts
@@ -157,6 +108,30 @@ function updateGrounding(acc, candidate) {
       }
     }
   }
+}
+
+function mergeGroundingChunks(existing = [], incoming = []) {
+  const map = new Map()
+  const add = (chunk) => {
+    if (!chunk || typeof chunk !== 'object') return
+    const uri = chunk?.web?.uri
+    const key = uri || JSON.stringify(chunk)
+    if (!map.has(key)) map.set(key, chunk)
+  }
+  for (const c of existing) add(c)
+  for (const c of incoming) add(c)
+  return Array.from(map.values())
+}
+
+function mergeWebSearchQueries(existing = [], incoming = []) {
+  const set = new Set()
+  const add = (q) => {
+    const t = typeof q === 'string' ? q.trim() : ''
+    if (t) set.add(t)
+  }
+  for (const q of existing) add(q)
+  for (const q of incoming) add(q)
+  return Array.from(set)
 }
 
 function accumulateFromCalls(acc, functionCalls) {
@@ -205,25 +180,72 @@ function buildGroundingMetadata(acc) {
   return { sources, webSearchQueries }
 }
 
-// Merge urlContext arrays, de-duplicating by uri when available
-function mergeUrlContexts(existing = [], incoming = []) {
-  const map = new Map()
-  const add = (item) => {
-    if (!item) return
-    const uri =
-      item.uri ||
-      item.url ||
-      item.webPage?.uri ||
-      item.webPage?.url ||
-      item.web?.uri
-    const key = uri || JSON.stringify(item)
-    if (!map.has(key)) {
-      map.set(key, item)
+function summarizeTokenUsage(tokenUsage) {
+  const all = [
+    tokenUsage?.precheck || null,
+    tokenUsage?.clarify || null,
+    tokenUsage?.plan || null,
+    tokenUsage?.final || null,
+  ].filter(Boolean)
+
+  const sumField = (m, key) => (m && typeof m[key] === 'number' ? m[key] : 0)
+
+  const breakdown = {
+    prompt: all.reduce((acc, m) => acc + sumField(m, 'promptTokenCount'), 0),
+    tool: all.reduce((acc, m) => acc + sumField(m, 'toolUsePromptTokenCount'), 0),
+    output: all.reduce((acc, m) => acc + sumField(m, 'candidatesTokenCount'), 0),
+    thoughts: all.reduce((acc, m) => acc + sumField(m, 'thoughtsTokenCount'), 0),
+    total: all.reduce((acc, m) => acc + sumField(m, 'totalTokenCount'), 0),
+  }
+
+  const stepTotal = (m) => sumField(m, 'totalTokenCount')
+
+  return {
+    steps: {
+      precheck: stepTotal(tokenUsage?.precheck || null),
+      clarify: stepTotal(tokenUsage?.clarify || null),
+      plan: stepTotal(tokenUsage?.plan || null),
+      final: stepTotal(tokenUsage?.final || null),
+    },
+    breakdown,
+  }
+}
+
+function formatFunctionCallForLog(call) {
+  const name = call?.name ? String(call.name) : '(unknown)'
+  let args = call?.args ?? call?.arguments
+  if (typeof args === 'string') {
+    try {
+      args = JSON.parse(args)
+    } catch {
+      // keep as string
     }
   }
-  for (const c of existing) add(c)
-  for (const c of incoming) add(c)
-  return Array.from(map.values())
+  let argsText = ''
+  try {
+    argsText = args === undefined ? '' : JSON.stringify(args, null, 2)
+  } catch {
+    argsText = String(args)
+  }
+  if (argsText && argsText.length > 4000) {
+    argsText = argsText.slice(0, 4000) + '\n…(truncated)'
+  }
+  return `\n[FUNCTION_CALL]\nname: ${name}${argsText ? `\nargs:\n${argsText}` : ''}\n`
+}
+
+function formatFunctionResponseForLog(resp) {
+  const name = resp?.name ? String(resp.name) : '(unknown)'
+  let response = resp?.response ?? resp?.content ?? resp?.data
+  let bodyText = ''
+  try {
+    bodyText = response === undefined ? '' : JSON.stringify(response, null, 2)
+  } catch {
+    bodyText = String(response)
+  }
+  if (bodyText && bodyText.length > 4000) {
+    bodyText = bodyText.slice(0, 4000) + '\n…(truncated)'
+  }
+  return `\n[FUNCTION_RESPONSE]\nname: ${name}${bodyText ? `\nresponse:\n${bodyText}` : ''}\n`
 }
 
 async function streamOnce({
@@ -238,59 +260,91 @@ async function streamOnce({
   forceAnswer = false,
   debugLog = false,
   groundingAcc,
-  collectUrlContextMetadata = false,
+  collectGroundingMetadata = false,
   collectAnswerText = false,
   collectAnswerParts = false,
+  suppressEmit = false,
 }) {
   const stream = await chat.sendMessageStream({ message, config })
   const functionCalls = []
   let usageMetadata = null
-  let aggregatedUrlContexts = []
+  let aggregatedGroundingChunks = []
+  let aggregatedWebSearchQueries = []
   const collectedAnswerParts = collectAnswerText ? [] : null
   const collectedAnswerPartsRaw = collectAnswerParts ? [] : null
   let collectedAnswerRole = null
+  const emittedToolEvents = new Set()
 
   for await (const chunk of stream) {
     const candidate = chunk?.candidates?.[0] || {}
     const parts = candidate.content?.parts || []
     const contentRole = candidate?.content?.role
-    let effectiveMeta = null
-    if (collectUrlContextMetadata) {
-      const urlMeta = buildUrlContextMetadata(candidate?.urlContextMetadata || candidate?.groundingMetadata || candidate?.grounding)
-      if (urlMeta?.urlContexts?.length) {
-        aggregatedUrlContexts = mergeUrlContexts(aggregatedUrlContexts, urlMeta.urlContexts)
+    const groundingNow = candidate?.groundingMetadata || candidate?.grounding || null
+    if (collectGroundingMetadata) {
+      const grounding = candidate?.groundingMetadata || candidate?.grounding
+      if (grounding?.groundingChunks?.length) {
+        aggregatedGroundingChunks = mergeGroundingChunks(
+          aggregatedGroundingChunks,
+          grounding.groundingChunks
+        )
       }
-      if (step === 'final' && aggregatedUrlContexts.length) {
-        effectiveMeta = { urlContexts: aggregatedUrlContexts }
+      if (grounding?.webSearchQueries?.length) {
+        aggregatedWebSearchQueries = mergeWebSearchQueries(
+          aggregatedWebSearchQueries,
+          grounding.webSearchQueries
+        )
       }
     }
-    const shapedParts = emitContentParts({
-      parts,
-      socket,
-      chatId,
-      requestId,
-      step,
-      forceThoughts,
-      forceAnswer,
-      debugLog,
-      // Only FINAL should surface urlContextMetadata to frontend
-      urlContextMetadata: effectiveMeta,
-    })
-    if (collectAnswerText && Array.isArray(shapedParts)) {
-      for (const shapedPart of shapedParts) {
-        if (!shapedPart) continue
-        if (shapedPart.thought) continue
-        if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
-          collectedAnswerParts.push(shapedPart.text)
+    if (!suppressEmit) {
+      const shapedParts = emitContentParts({
+        parts,
+        socket,
+        chatId,
+        requestId,
+        step,
+        forceThoughts,
+        forceAnswer,
+        debugLog,
+        grounding: groundingNow,
+      })
+      if (collectAnswerText && Array.isArray(shapedParts)) {
+        for (const shapedPart of shapedParts) {
+          if (!shapedPart) continue
+          if (shapedPart.thought) continue
+          if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
+            collectedAnswerParts.push(shapedPart.text)
+          }
         }
       }
-    }
-    if (collectAnswerParts && Array.isArray(shapedParts)) {
-      for (const shapedPart of shapedParts) {
-        if (!shapedPart) continue
-        if (shapedPart.thought) continue
-        if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
-          collectedAnswerPartsRaw.push({ text: shapedPart.text })
+      if (collectAnswerParts && Array.isArray(shapedParts)) {
+        for (const shapedPart of shapedParts) {
+          if (!shapedPart) continue
+          if (shapedPart.thought) continue
+          if (typeof shapedPart.text === 'string' && shapedPart.text.length) {
+            collectedAnswerPartsRaw.push({ text: shapedPart.text })
+            if (!collectedAnswerRole && contentRole) {
+              collectedAnswerRole = contentRole
+            }
+          }
+        }
+      }
+    } else if (collectAnswerText || collectAnswerParts) {
+      for (const part of parts) {
+        const hasTextField = part?.text !== undefined && part?.text !== null
+        if (!hasTextField) continue
+        const thoughtFlag = forceAnswer
+          ? false
+          : forceThoughts
+            ? true
+            : !!part?.thought
+        if (thoughtFlag) continue
+        const text = String(part.text)
+        if (!text) continue
+        if (collectAnswerText && collectedAnswerParts) {
+          collectedAnswerParts.push(text)
+        }
+        if (collectAnswerParts && collectedAnswerPartsRaw) {
+          collectedAnswerPartsRaw.push({ text })
           if (!collectedAnswerRole && contentRole) {
             collectedAnswerRole = contentRole
           }
@@ -301,17 +355,53 @@ async function streamOnce({
       updateGrounding(groundingAcc, candidate)
     }
 
-    // Check for function calls in parts (new API format)
+    const emitToolEvent = (text) => {
+      if (suppressEmit) return
+      if (!text) return
+      emitContentParts({
+        parts: [{ text }],
+        socket,
+        chatId,
+        requestId,
+        step,
+        forceThoughts: true,
+        forceAnswer: false,
+        debugLog: debugLog,
+        grounding: null,
+      })
+    }
+
+    // Check for function calls and responses in parts (new API format)
     for (const part of parts) {
       if (part?.functionCall) {
         functionCalls.push(part.functionCall)
+        const key = `call:${part.functionCall?.name}:${JSON.stringify(part.functionCall?.args ?? part.functionCall?.arguments ?? '')}`
+        if (!emittedToolEvents.has(key)) {
+          emittedToolEvents.add(key)
+          emitToolEvent(formatFunctionCallForLog(part.functionCall))
+        }
+      }
+      if (part?.functionResponse) {
+        const resp = part.functionResponse
+        const key = `resp:${resp?.name}:${JSON.stringify(resp?.response ?? resp?.content ?? resp?.data ?? '')}`
+        if (!emittedToolEvents.has(key)) {
+          emittedToolEvents.add(key)
+          emitToolEvent(formatFunctionResponseForLog(resp))
+        }
       }
     }
 
     // Also check candidate.functionCalls (old API format)
     const calls = candidate.functionCalls || []
     if (Array.isArray(calls) && calls.length) {
-      functionCalls.push(...calls)
+      for (const call of calls) {
+        functionCalls.push(call)
+        const key = `call_old:${call?.name}:${JSON.stringify(call?.args ?? call?.arguments ?? '')}`
+        if (!emittedToolEvents.has(key)) {
+          emittedToolEvents.add(key)
+          emitToolEvent(formatFunctionCallForLog(call))
+        }
+      }
     }
 
     // Capture usage metadata from chunk
@@ -321,7 +411,7 @@ async function streamOnce({
   }
 
   // Log token usage if available
-  if (usageMetadata) {
+  if (debugLog && usageMetadata) {
     const { promptTokenCount, candidatesTokenCount, totalTokenCount, thoughtsTokenCount, toolUsePromptTokenCount } = usageMetadata
     console.log(`[agent-runner] ${step.toUpperCase()} tokens: prompt=${promptTokenCount || 0}, tool=${toolUsePromptTokenCount || 0}, output=${candidatesTokenCount || 0}, thoughts=${thoughtsTokenCount || 0}, total=${totalTokenCount || 0}`)
   }
@@ -329,7 +419,12 @@ async function streamOnce({
   return {
     functionCalls,
     usageMetadata,
-    urlContextMetadata: aggregatedUrlContexts.length ? { urlContexts: aggregatedUrlContexts } : null,
+    groundingMetadata: collectGroundingMetadata
+      ? {
+          webSearchQueries: aggregatedWebSearchQueries,
+          groundingChunks: aggregatedGroundingChunks,
+        }
+      : null,
     answerText: collectAnswerText && collectedAnswerParts ? collectedAnswerParts.join('') : undefined,
     answerParts: collectAnswerParts && collectedAnswerPartsRaw ? collectedAnswerPartsRaw : undefined,
     answerRole: collectAnswerParts ? collectedAnswerRole : undefined,
@@ -359,31 +454,7 @@ function toUserContent(message) {
 }
 
 function extractUserText(message) {
-  const prefix = mandatoryFinalUrlInstruction
-  if (typeof message === 'string') return `${prefix}\n${message}`
-  if (Array.isArray(message)) {
-    const withRole = message.filter(
-      (m) => m && typeof m === 'object' && typeof m.role === 'string'
-    )
-    const content = withRole.length ? withRole[withRole.length - 1] : null
-    const parts = content?.parts
-    if (Array.isArray(parts)) {
-      const base = parts
-        .map((p) => (p?.text ? String(p.text) : ''))
-        .filter(Boolean)
-        .join('\n')
-      return base ? `${prefix}\n${base}` : prefix
-    }
-    return prefix
-  }
-  if (message && typeof message === 'object' && Array.isArray(message.parts)) {
-    const base = message.parts
-      .map((p) => (p?.text ? String(p.text) : ''))
-      .filter(Boolean)
-      .join('\n')
-    return base ? `${prefix}\n${base}` : prefix
-  }
-  return prefix
+  return extractOriginalUserText(message)
 }
 
 function extractOriginalUserText(message) {
@@ -417,6 +488,29 @@ function extractAssistantText(message) {
     .map((p) => (p?.text ? String(p.text) : ''))
     .filter(Boolean)
     .join('\n')
+}
+
+function findFirstUserIndexAfter(history, startIndex) {
+  if (!Array.isArray(history)) return -1
+  const from = typeof startIndex === 'number' && startIndex >= 0 ? startIndex : 0
+  for (let i = from; i < history.length; i++) {
+    const m = history[i]
+    if (m && m.role === 'user') return i
+  }
+  return -1
+}
+
+function concatModelTextAfterIndex(history, startIndex) {
+  if (!Array.isArray(history) || history.length === 0) return ''
+  const from = typeof startIndex === 'number' && startIndex >= 0 ? startIndex + 1 : 0
+  const chunks = []
+  for (let i = from; i < history.length; i++) {
+    const m = history[i]
+    if (!m || m.role !== 'model') continue
+    const text = extractAssistantText(m)
+    if (text) chunks.push(text)
+  }
+  return chunks.join('\n')
 }
 
 function extractUserUrls(message) {
@@ -468,8 +562,7 @@ export async function runAgentSession({
     throw new Error('Agent base model is not configured (set AGENT_BASE_MODEL)')
   }
 
-  // Extract user-requested model for FINAL step (if different from baseModel)
-  const refineModel = requestConfig.model || resolvedBaseModel
+  const sessionModel = requestConfig.model || resolvedBaseModel
   const options = requestConfig.options || {}
   const includeThoughts =
     options.includeThoughts !== undefined ? !!options.includeThoughts : true
@@ -479,147 +572,101 @@ export async function runAgentSession({
 
   // Debug mode controlled by environment variable
   const debugMode = process.env.AGENT_DEBUG === 'true'
-  const refineEnabled = process.env.AGENT_REFINE_ENABLED === 'true'
 
   const baseThinking = { includeThoughts }
   const ai = new GoogleGenAI({ apiKey })
 
-  // Build system instruction based on step type
-  const buildSystemInstruction = (stepType) => {
-    const shared = [
-      criticalAgentRules,
-      '',
-      commonAgentPolicies,
-    ].filter(Boolean).join('\n')
+  // Unified system instruction: Default + User + Agent (do not split by step)
+  const unifiedSystemInstruction = [
+    defaultSystemInstruction || null,
+    userSystemInstruction || null,
+    criticalAgentRules,
+    commonAgentPolicies,
+    agentFormatRules,
+    agentPersonaInstruction,
+    searchPolicyInstruction,
+    flowInstruction,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 
-    const base = [
-      defaultSystemInstruction
-        ? `---\nBASE SYSTEM INSTRUCTION\n---\n\n${defaultSystemInstruction}`
-        : null,
-      userSystemInstruction
-        ? `---\nUSER-SPECIFIED INSTRUCTION\n---\n\n${userSystemInstruction}`
-        : null,
-    ].filter(Boolean)
+  const createSessionChat = ({ model, history, config = {} }) =>
+    ai.chats.create({
+      model,
+      config: {
+        systemInstruction: unifiedSystemInstruction || undefined,
+        thinkingConfig: baseThinking,
+        ...config,
+      },
+      history,
+    })
 
-    if (stepType === 'precheck') {
-      return [
-        shared,
-        ...base,
-        '',
-        `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
-      ]
-        .filter(Boolean)
-        .join('\n')
-    }
-
-    if (stepType === 'final') {
-      return [
-        shared,
-        ...base,
-        '',
-        finalSystemInstruction,
-        '',
-        `---\nASSISTANT PERSONA\n---\n\n${agentPersonaInstruction}`,
-      ]
-        .filter(Boolean)
-        .join('\n')
-    }
-
-    if (stepType === 'refine') {
-      return [
-        shared,
-        ...base,
-        '',
-      ]
-        .filter(Boolean)
-        .join('\n')
-    }
-
-    // CLARIFY/PLAN steps: include critical agent rules
-    return [
-      shared,
-      ...base,
-      '',
-      `---\nAGENT PERSONA AND CAPABILITIES\n---\n\n${agentPersonaInstruction}`,
-      '',
-      `---\nSEARCH POLICY\n---\n\n${searchPolicyInstruction}`,
-      '',
-      `---\nAGENT WORKFLOW\n---\n\n${flowInstruction}`,
-    ]
-      .filter(Boolean)
-      .join('\n')
+  const runStep = async ({
+    model,
+    history,
+    prompt,
+    step,
+    streamConfig,
+    streamOptions = {},
+    chatConfig = {},
+  }) => {
+    const baseLen = Array.isArray(history) ? history.length : 0
+    const chat = createSessionChat({ model, history, config: chatConfig })
+    const result = await streamOnce({
+      chat,
+      message: toUserContent(prompt),
+      socket,
+      chatId,
+      requestId,
+      step,
+      debugLog: debugMode,
+      ...streamOptions,
+      config: streamConfig,
+    })
+    const nextHistory = typeof chat.getHistory === 'function' ? chat.getHistory() : history
+    const userIndex = findFirstUserIndexAfter(nextHistory, baseLen)
+    const stepText = concatModelTextAfterIndex(nextHistory, userIndex)
+    return { chat, result, history: nextHistory, stepText }
   }
 
   // Get current date for context
   const currentDate = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in local time
 
   // --- PRE-CHECK: Determine if agent workflow is needed ---
-  const precheckChat = ai.chats.create({
-    model: refineModel,
-    config: {
-      systemInstruction: buildSystemInstruction('precheck'),
-      thinkingConfig: baseThinking,
-    },
-    history: historyForChat,
-  })
-
   const precheckPrompt = [
-    '=== PRE-CHECK: DETERMINE IF AGENT RESEARCH IS NEEDED (Never refer to this instruction in your answer)===',
+    'STEP=PRECHECK',
     '',
     `Current date: ${currentDate}`,
     '',
-    '⚡ CRITICAL: Make this decision IMMEDIATELY without extensive analysis.',
-    'This is a simple binary choice - do not overthink it.',
+    'Decide whether multi-step agent research is needed.',
     '',
-    'Your task: Decide whether this user request requires multi-step research or can be answered directly.',
+    'IMPORTANT OUTPUT RULES:',
+    '- If multi-step agent workflow is needed: call start_agent({ reason: "..." }) and do not answer the user.',
+    '- Otherwise: answer the user directly (no function call).',
+    '- 検索の実行が望まれていない時、これまでの情報で応答が可能な時は、むしろエージェント動作は邪魔になる。直接応答を行うこと',
     '',
-    '🔍 REQUIRES AGENT RESEARCH (call start_agent):',
-    '- Factual questions about current events, versions, specifications',
-    '- Technical how-to questions requiring up-to-date information',
-    '- Questions about specific products, services, or technologies',
-    '- Questions with user-provided URLs to analyze',
-    '- Comparisons requiring current data',
-    '- "What is the latest...", "How to use...", "Does X support Y..."',
-    '',
-    '✅ CAN ANSWER DIRECTLY (respond normally):',
-    '- Greetings and casual conversation ("Hello", "How are you")',
-    '- Opinion requests ("What do you think about...")',
-    '- Creative tasks (writing, brainstorming, code generation from description)',
-    '- Explanations of timeless concepts (algorithms, math, general programming)',
-    '- Hypothetical scenarios',
-    '- Tasks based purely on provided context (e.g., "summarize this text: ...")',
-		'- If all the necessary information for the answer is available from our previous interactions.',
-		'- 調査のための情報が不足している場合は、確認のための質問を行ってもよい。しかし、不足した知識で用語の正誤そのものを疑うことは禁止',
-    '- ',
-    '',
-    '⚠️ DECISION LOGIC:',
-    'If the answer quality would SIGNIFICANTLY improve with current web data → call start_agent',
-    'If you can provide a complete, helpful answer with your training data → respond directly',
-    '',
-    '📋 EXECUTION:',
-    '1. Read the user request',
-    '2. Make instant decision: agent needed or not?',
-    '3. If agent needed: call start_agent(reason: "brief reason") - DO NOT write answer',
-    '4. If not needed: write answer directly - DO NOT call start_agent',
+    'Rule of thumb: if the answer needs current facts, external sources, or URL analysis -> start_agent.',
     '',
     '=== USER REQUEST ===',
-    extractUserText(contents),
+    extractOriginalUserText(contents),
     '',
   ]
     .filter(Boolean)
     .join('\n')
 
-  const precheckResult = await streamOnce({
-    chat: precheckChat,
-    message: toUserContent(precheckPrompt),
-    socket,
-    chatId,
-    requestId,
+  const { result: precheckResult } = await runStep({
+    model: sessionModel,
+    history: historyForChat,
+    prompt: precheckPrompt,
     step: 'precheck',
-    forceThoughts: false,
-    debugLog: debugMode,
-    groundingAcc: null,
-    config: {
+    streamOptions: {
+      forceThoughts: false,
+      forceAnswer: false,
+      groundingAcc: null,
+      collectAnswerParts: true,
+      suppressEmit: true,
+    },
+    streamConfig: {
       tools: [
         {
           functionDeclarations: [
@@ -647,38 +694,39 @@ export async function runAgentSession({
   }
   const agentStartCall = precheckResult.functionCalls?.find(call => call?.name === 'start_agent')
 
-  if (!agentStartCall) {
-    // Direct answer was provided, agent workflow not needed
-    // The answer has already been streamed to the user
-    if (debugMode) {
-      console.log('[agent-runner] PRE_CHECK: Direct answer provided, skipping agent workflow')
-    }
-    socket.emit('end_generation', { ok: true, chatId, requestId })
-    return
-  }
-
-  // Agent workflow is needed, continue with CLARIFY and PLAN before FINAL
-  const groundingAcc = { sources: new Map(), queries: new Set() }
-  let allUrlContexts = []
-
   const tokenUsage = {
     precheck: precheckResult.usageMetadata,
     clarify: null,
     plan: null,
     final: null,
-    refine: null,
   }
 
-  // --- Clarify stage (always once) ---
-  const clarifyChat = ai.chats.create({
-    model: resolvedBaseModel,
-    config: {
-      systemInstruction: buildSystemInstruction('agent'),
-      thinkingConfig: baseThinking,
-    },
-    history: precheckChat.getHistory(),
-  })
+  if (!agentStartCall) {
+    // PRECHECK answered directly: emit as FINAL body (not thoughts).
+    emitContentParts({
+      parts: precheckResult.answerParts || [],
+      socket,
+      chatId,
+      requestId,
+      step: 'final',
+      forceThoughts: false,
+      forceAnswer: true,
+      debugLog: debugMode,
+      grounding: null,
+    })
+    socket.emit('end_generation', {
+      ok: true,
+      chatId,
+      requestId,
+      tokenUsage: summarizeTokenUsage(tokenUsage),
+    })
+    return
+  }
 
+  // Agent workflow is needed, continue with CLARIFY and PLAN before FINAL
+  const groundingAcc = { sources: new Map(), queries: new Set() }
+
+  // --- Clarify stage (always once) ---
   const clarifyPrompt = [
     'STEP=CLARIFY',
     '',
@@ -700,91 +748,51 @@ export async function runAgentSession({
     .filter(Boolean)
     .join('\n')
 
-  const clarifyResult = await streamOnce({
-    chat: clarifyChat,
-    message: toUserContent(clarifyPrompt),
-    socket,
-    chatId,
-    requestId,
+  const { result: clarifyResult, history: clarifyHistory } = await runStep({
+    model: resolvedBaseModel,
+    history: historyForChat,
+    prompt: clarifyPrompt,
     step: 'clarify',
-    forceThoughts: true,
-    debugLog: debugMode,
-    groundingAcc,
-    collectUrlContextMetadata: true,
-    config: {
-      tools: [{ googleSearch: {} }, { urlContext: {} }],
+    streamOptions: { forceThoughts: true, groundingAcc },
+    streamConfig: {
+      tools: [{ googleSearch: {} }],
       thinkingConfig: baseThinking,
       topP: 0.2,
     },
   })
-  if (clarifyResult.urlContextMetadata?.urlContexts?.length) {
-    allUrlContexts = mergeUrlContexts(allUrlContexts, clarifyResult.urlContextMetadata.urlContexts)
-  }
   accumulateFromCalls(groundingAcc, clarifyResult.functionCalls)
   tokenUsage.clarify = clarifyResult.usageMetadata
 
-  // --- Plan stage (always once) ---
-  const planChat = ai.chats.create({
-    model: resolvedBaseModel,
-    config: {
-      systemInstruction: buildSystemInstruction('agent'),
-      thinkingConfig: baseThinking,
-    },
-    history: clarifyChat.getHistory(),
-  })
-
+  // --- PLAN stage (always once; no tools) ---
   const planPrompt = [
     'STEP=PLAN',
     '',
     `=== CURRENT DATE ===`,
     `Today's date: ${currentDate}`,
     '',
-    'Use the chat history above (including CLARIFY) to inform your plan.',
+    '=== USER REQUEST ===',
+    extractUserText(contents),
     '',
-    planTurnPrompt,
-    '',
-    agentAddendumPlan,
-    '',
-    '=== BEGIN OUTPUT ===',
+    buildPlanPrompt({ currentDate }),
     '',
   ]
     .filter(Boolean)
     .join('\n')
 
-  const planResult = await streamOnce({
-    chat: planChat,
-    message: toUserContent(planPrompt),
-    socket,
-    chatId,
-    requestId,
+  const { result: planResult, history: planHistory } = await runStep({
+    model: resolvedBaseModel,
+    history: clarifyHistory,
+    prompt: planPrompt,
     step: 'plan',
-    forceThoughts: true,
-    debugLog: debugMode,
-    groundingAcc,
-    collectUrlContextMetadata: true,
-    config: {
-      tools: [{ googleSearch: {} }, { urlContext: {} }],
-      thinkingConfig: baseThinking,
-      topP: 0.2,
-    },
+    streamOptions: { forceThoughts: true, groundingAcc },
+    streamConfig: { thinkingConfig: baseThinking, topP: 0.2 },
   })
-  if (planResult.urlContextMetadata?.urlContexts?.length) {
-    allUrlContexts = mergeUrlContexts(allUrlContexts, planResult.urlContextMetadata.urlContexts)
-  }
-  accumulateFromCalls(groundingAcc, planResult.functionCalls)
+
   tokenUsage.plan = planResult.usageMetadata
+  let currentHistory = planHistory
+
 
   // --- FINAL: user-facing answer with optional searches ---
-  const finalChat = ai.chats.create({
-    model: resolvedBaseModel,
-    config: {
-      systemInstruction: buildSystemInstruction('final'),
-      thinkingConfig: baseThinking,
-			topP: 0.2,
-    },
-    history: planChat.getHistory(),
-  })
-
   const finalPrompt = [
     'STEP=FINAL',
     '',
@@ -807,206 +815,48 @@ export async function runAgentSession({
     .filter(Boolean)
     .join('\n')
 
-  const finalResult = await streamOnce({
-    chat: finalChat,
-    message: toUserContent(finalPrompt),
-    socket,
-    chatId,
-    requestId,
+  const { result: finalResult } = await runStep({
+    model: resolvedBaseModel,
+    history: currentHistory,
+    prompt: finalPrompt,
     step: 'final',
-    debugLog: debugMode,
-    collectUrlContextMetadata: true,
-    forceThoughts: refineEnabled,
-    groundingAcc,
-    config: { tools: [{ googleSearch: {} }, { urlContext: {} }], thinkingConfig: baseThinking },
+    streamOptions: { groundingAcc, collectGroundingMetadata: true },
+    streamConfig: { tools: [{ googleSearch: {} }, { urlContext: {} }], thinkingConfig: baseThinking },
+    chatConfig: { topP: 0.2 },
   })
-  if (finalResult.urlContextMetadata?.urlContexts?.length) {
-    allUrlContexts = mergeUrlContexts(allUrlContexts, finalResult.urlContextMetadata.urlContexts)
-  }
-  // Fallback: if no urlContextMetadata collected but grounding sources exist, convert them
-  if (!allUrlContexts.length) {
-    const groundingFromCalls = buildGroundingMetadata(groundingAcc)
-    if (groundingFromCalls?.sources?.length) {
-      const fallbackContexts = groundingFromCalls.sources
-        .map((s) => (s?.uri ? { uri: s.uri, title: s.title || null } : null))
-        .filter(Boolean)
-      if (fallbackContexts.length) {
-        allUrlContexts = mergeUrlContexts(allUrlContexts, fallbackContexts)
-      }
-    }
-  }
   tokenUsage.final = finalResult.usageMetadata
-
-  // --- REFINE: optional post-pass using urlContext only ---
-  let refineResult = null
-  const finalHistory = typeof finalChat.getHistory === 'function' ? finalChat.getHistory() : []
-  const lastAssistantMessage = Array.isArray(finalHistory)
-    ? [...finalHistory].reverse().find(
-        (m) =>
-          m &&
-          m.role === 'model' &&
-          Array.isArray(m.parts) &&
-          m.parts.length
-      )
-    : null
-  const lastAssistantText = extractAssistantText(lastAssistantMessage)
-
-  if (refineEnabled && lastAssistantMessage) {
-    const aggregatedUrlContexts = allUrlContexts.length
-      ? allUrlContexts
-      : finalResult.urlContextMetadata?.urlContexts || []
-    const groundingFromCalls = buildGroundingMetadata(groundingAcc)
-    const formattedUrls = aggregatedUrlContexts.length
-      ? aggregatedUrlContexts
-          .map((ctx) => {
-            const uri =
-              ctx?.uri ||
-              ctx?.url ||
-              ctx?.webPage?.uri ||
-              ctx?.webPage?.url ||
-              ctx?.web?.uri
-            const title = ctx?.title || ctx?.webPage?.title || ctx?.web?.title
-            return uri ? `- ${uri}${title ? ` (title: ${title})` : ''}` : null
-          })
-          .filter(Boolean)
-          .join('\n')
-      : groundingFromCalls?.sources?.length
-        ? groundingFromCalls.sources
-            .map((s) => (s?.uri ? `- ${s.uri}${s.title ? ` (title: ${s.title})` : ''}` : null))
-            .filter(Boolean)
-            .join('\n')
-        : 'No URL metadata collected.'
-
-    if (debugMode) {
-      console.log('[agent-runner] REFINE url contexts:', JSON.stringify(aggregatedUrlContexts))
-      console.log('[agent-runner] REFINE grounding sources:', JSON.stringify(groundingFromCalls?.sources || []))
-    }
-
-    const refineChat = ai.chats.create({
-      model: refineModel,
-      config: {
-        systemInstruction: buildSystemInstruction('refine'),
-        thinkingConfig: baseThinking,
-      },
-    })
-
-    const originalUserText = extractOriginalUserText(contents)
-    const refinePrompt = [
-      `=== CURRENT DATE ===`,
-      `Today's date: ${currentDate}`,
-      '',
-      'URL context metadata collected in FINAL:',
-      formattedUrls,
-      '',
-      '=== PRIOR FINAL ANSWER ===',
-      lastAssistantText ? lastAssistantText : '(No final answer text available)',
-      '',
-      '=== ORIGINAL USER REQUEST ===',
-      originalUserText ? originalUserText : '(No user request text available)',
-      '',
-      refineTurnPrompt,
-    ]
-      .filter(Boolean)
-      .join('\n')
-
-    refineResult = await streamOnce({
-      chat: refineChat,
-      message: toUserContent(refinePrompt),
-      socket,
-      chatId,
-      requestId,
-      step: 'refine',
-      debugLog: debugMode,
-      collectUrlContextMetadata: true,
-      collectAnswerText: true,
-      groundingAcc,
-      config: { tools: [{ urlContext: {} }], thinkingConfig: baseThinking, topP: 0.2 },
-    })
-    accumulateFromCalls(groundingAcc, refineResult.functionCalls)
-    tokenUsage.refine = refineResult.usageMetadata
-    if (refineResult.urlContextMetadata?.urlContexts?.length) {
-      allUrlContexts = mergeUrlContexts(allUrlContexts, refineResult.urlContextMetadata.urlContexts)
-    }
-  }
 
   // Print total token usage summary with breakdown when debugging
   if (debugMode) {
     console.log('\n=== AGENT WORKFLOW TOKEN USAGE SUMMARY ===')
+    const summary = summarizeTokenUsage(tokenUsage)
+    const precheckTotal = summary.steps.precheck
+    const clarifyTotal = summary.steps.clarify
+    const planTotal = summary.steps.plan
+    const finalTotal = summary.steps.final
+    const grandTotal = summary.breakdown.total
 
-    const sumTokens = (metadata) => metadata ? (metadata.totalTokenCount || 0) : 0
-    const sumPrompt = (metadata) => metadata ? (metadata.promptTokenCount || 0) : 0
-    const sumToolPrompt = (metadata) => metadata ? (metadata.toolUsePromptTokenCount || 0) : 0
-    const sumOutput = (metadata) => metadata ? (metadata.candidatesTokenCount || 0) : 0
-    const sumThoughts = (metadata) => metadata ? (metadata.thoughtsTokenCount || 0) : 0
-
-    const precheckTotal = sumTokens(tokenUsage.precheck)
-    const clarifyTotal = sumTokens(tokenUsage.clarify)
-    const planTotal = sumTokens(tokenUsage.plan)
-    const finalTotal = sumTokens(tokenUsage.final)
-    const refineTotal = sumTokens(tokenUsage.refine)
-    const grandTotal = precheckTotal + clarifyTotal + planTotal + finalTotal + refineTotal
-
-    const allMetadata = [
-      tokenUsage.precheck,
-      tokenUsage.clarify,
-      tokenUsage.plan,
-      tokenUsage.final,
-      tokenUsage.refine,
-    ].filter(Boolean)
-
-    const totalPrompt = allMetadata.reduce((sum, m) => sum + sumPrompt(m), 0)
-    const totalToolPrompt = allMetadata.reduce((sum, m) => sum + sumToolPrompt(m), 0)
-    const totalOutput = allMetadata.reduce((sum, m) => sum + sumOutput(m), 0)
-    const totalThoughts = allMetadata.reduce((sum, m) => sum + sumThoughts(m), 0)
-
-    console.log(`PRE_CHECK:  ${precheckTotal.toLocaleString()} tokens`)
+    console.log(`PRECHECK:   ${precheckTotal.toLocaleString()} tokens`)
     console.log(`CLARIFY:    ${clarifyTotal.toLocaleString()} tokens`)
     console.log(`PLAN:       ${planTotal.toLocaleString()} tokens`)
     console.log(`FINAL:      ${finalTotal.toLocaleString()} tokens`)
-    console.log(`REFINE:     ${refineTotal.toLocaleString()} tokens`)
     console.log(`───────────────────────────────────────`)
     console.log(`TOTAL:      ${grandTotal.toLocaleString()} tokens`)
     console.log(``)
     console.log(`BREAKDOWN:`)
-    console.log(`  User Input + System:    ${totalPrompt.toLocaleString()} tokens (${grandTotal ? ((totalPrompt/grandTotal)*100).toFixed(1) : '0.0'}%)`)
-    console.log(`  Tool Declarations:      ${totalToolPrompt.toLocaleString()} tokens (${grandTotal ? ((totalToolPrompt/grandTotal)*100).toFixed(1) : '0.0'}%)`)
-    console.log(`  Model Output:           ${totalOutput.toLocaleString()} tokens (${grandTotal ? ((totalOutput/grandTotal)*100).toFixed(1) : '0.0'}%)`)
-    console.log(`  Thoughts (Reasoning):   ${totalThoughts.toLocaleString()} tokens (${grandTotal ? ((totalThoughts/grandTotal)*100).toFixed(1) : '0.0'}%)`)
+    console.log(`  User Input + System:    ${summary.breakdown.prompt.toLocaleString()} tokens (${grandTotal ? ((summary.breakdown.prompt/grandTotal)*100).toFixed(1) : '0.0'}%)`)
+    console.log(`  Tool Declarations:      ${summary.breakdown.tool.toLocaleString()} tokens (${grandTotal ? ((summary.breakdown.tool/grandTotal)*100).toFixed(1) : '0.0'}%)`)
+    console.log(`  Model Output:           ${summary.breakdown.output.toLocaleString()} tokens (${grandTotal ? ((summary.breakdown.output/grandTotal)*100).toFixed(1) : '0.0'}%)`)
+    console.log(`  Thoughts (Reasoning):   ${summary.breakdown.thoughts.toLocaleString()} tokens (${grandTotal ? ((summary.breakdown.thoughts/grandTotal)*100).toFixed(1) : '0.0'}%)`)
     console.log('==========================================\n')
   }
-
-  const mergedUrlContextMetadata = (() => {
-    const finalMeta = finalResult.urlContextMetadata
-    const refineMeta = refineResult?.urlContextMetadata
-    const mergedMeta = []
-    if (Array.isArray(allUrlContexts) && allUrlContexts.length) {
-      mergedMeta.push(...allUrlContexts)
-    }
-    if (finalMeta?.urlContexts?.length) {
-      mergedMeta.push(...finalMeta.urlContexts)
-    }
-    if (refineMeta?.urlContexts?.length) {
-      mergedMeta.push(...refineMeta.urlContexts)
-    }
-    const merged = mergeUrlContexts([], mergedMeta)
-    if (merged.length) return { urlContexts: merged }
-    // Fallback: convert groundingAcc sources when urlContexts missing
-    const groundingFallback = buildGroundingMetadata(groundingAcc)
-    if (groundingFallback?.sources?.length) {
-      const fallback = groundingFallback.sources
-        .map((s) => (s?.uri ? { uri: s.uri, title: s.title || null } : null))
-        .filter(Boolean)
-      const mergedFallback = mergeUrlContexts([], fallback)
-      return mergedFallback.length ? { urlContexts: mergedFallback } : null
-    }
-    return null
-  })()
 
   socket.emit('end_generation', {
     ok: true,
     chatId,
     requestId,
-    urlContextMetadata: mergedUrlContextMetadata,
     grounding: buildGroundingMetadata(groundingAcc),
+    groundingMetadata: finalResult.groundingMetadata || null,
+    tokenUsage: summarizeTokenUsage(tokenUsage),
   })
 }
