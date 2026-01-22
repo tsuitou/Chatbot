@@ -785,7 +785,11 @@ export async function runAgentSession({
     prompt: planPrompt,
     step: 'plan',
     streamOptions: { forceThoughts: true, groundingAcc },
-    streamConfig: { thinkingConfig: baseThinking, topP: 0.2 },
+    streamConfig: {
+      tools: [{ googleSearch: {} }, { urlContext: {} }],
+      thinkingConfig: baseThinking,
+      topP: 0.2
+    },
   })
 
   tokenUsage.plan = planResult.usageMetadata

@@ -92,7 +92,7 @@ app.use(cors({
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: { origin: allowed.length ? allowed : '*' },
-  maxHttpBufferSize: 50 * 1024 * 1024,
+  maxHttpBufferSize: 10 * 1024 * 1024,
   path: SOCKET_PATH,
 })
 
