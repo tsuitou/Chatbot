@@ -26,6 +26,20 @@
       "parameters": {}
     },
     {
+      "modelQuery": "3.1-pro",
+      "parameters": {
+        "thinkingLevel": {
+          "type": "enum",
+          "label": "Thinking Level",
+          "options": [
+            { "label": "Low", "value": "low" },
+            { "label": "Medium", "value": "medium" },
+            { "label": "High", "value": "high" }
+          ]
+        }
+      }
+    },
+    {
       "modelQuery": "3-pro",
       "parameters": {
         "thinkingLevel": {

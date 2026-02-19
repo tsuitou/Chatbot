@@ -1141,9 +1141,17 @@ export async function exportArchive(scope = { kind: 'all' }) {
 export async function importArchive(file, opts = {}) {
   const idMode = opts.idMode ?? 'rewrite-if-conflict'
   const zip = await JSZip.loadAsync(file)
-  const manifestFile = zip.file('manifest.json')
+  const manifestFile =
+    zip.file('manifest.json') ||
+    zip.file(/(^|\/)manifest\.json$/i)[0] ||
+    zip.file(/(^|\/)\.\/manifest\.json$/i)[0]
   if (!manifestFile) {
-    throw new Error('manifest.json not found in the archive.')
+    const zipEntries = Object.keys(zip.files || {})
+    const hint =
+      zipEntries.length > 0
+        ? ` Available files: ${zipEntries.slice(0, 20).join(', ')}`
+        : ''
+    throw new Error(`manifest.json not found in the archive.${hint}`)
   }
   const manifest = JSON.parse(await manifestFile.async('string'))
 
