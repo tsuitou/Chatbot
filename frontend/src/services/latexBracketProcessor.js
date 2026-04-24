@@ -1,5 +1,5 @@
 /* eslint-disable no-useless-escape */
-import balanced from 'balanced-match'
+import { balanced } from 'balanced-match'
 
 const containsLatexRegex =
   /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\}.*?\\end\{equation\}/s
