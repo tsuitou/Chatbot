@@ -1,11 +1,7 @@
 # Specific files to ignore
-/.env
 /GEMINI.md
 /CLAUDE.md
 /AGENTS.md
-/compact_context.txt
-/DESIGN_MEMO.md
-/claude_api.md
 
 # Documents
 /api-tests
@@ -27,7 +23,6 @@ backend/key_valid
 /releases/
 
 # Context files
-compact_context.txt
 
 # SEA build artifacts
 /backend/chatbot.exe
