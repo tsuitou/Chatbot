@@ -1,0 +1,10 @@
+[
+  {
+    "name": "deep-research-preview-04-2026",
+    "description": "Standard Gemini Deep Research agent. Use for explicit source-backed web research, current-information investigation, broad comparisons, planning/refinement, and execution of an approved research plan."
+  },
+  {
+    "name": "deep-research-max-preview-04-2026",
+    "description": "Max Gemini Deep Research agent. Use only for explicitly exhaustive, comprehensive, very deep, or high-cost research requests."
+  }
+]

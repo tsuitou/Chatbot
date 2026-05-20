@@ -1,6 +1,4 @@
 /* eslint-disable no-useless-escape */
-import { balanced } from 'balanced-match'
-
 const containsLatexRegex =
   /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\}.*?\\end\{equation\}/s
 const PROTECTED_PREFIX = '__LATEX_PROTECTED__'
@@ -89,8 +87,7 @@ function convertDelimited(source, open, close, replacer) {
       continue
     }
 
-    const slice = rest.slice(idx)
-    const match = balanced(open, close, slice)
+    const match = findDelimited(rest, idx, open, close)
     if (!match) {
       result += rest
       break
@@ -107,6 +104,40 @@ function convertDelimited(source, open, close, replacer) {
   }
 
   return result
+}
+
+function findDelimited(source, start, open, close) {
+  const bodyStart = start + open.length
+  let depth = 1
+  let cursor = bodyStart
+
+  while (cursor < source.length) {
+    const nextOpen = source.indexOf(open, cursor)
+    const nextClose = source.indexOf(close, cursor)
+    if (nextClose === -1) return null
+
+    if (nextOpen !== -1 && nextOpen < nextClose && !isEscaped(source, nextOpen)) {
+      depth += 1
+      cursor = nextOpen + open.length
+      continue
+    }
+
+    if (isEscaped(source, nextClose)) {
+      cursor = nextClose + close.length
+      continue
+    }
+
+    depth -= 1
+    if (depth === 0) {
+      return {
+        body: source.slice(bodyStart, nextClose),
+        post: source.slice(nextClose + close.length),
+      }
+    }
+    cursor = nextClose + close.length
+  }
+
+  return null
 }
 
 function isEscaped(str, index) {

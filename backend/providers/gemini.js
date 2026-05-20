@@ -27,6 +27,11 @@ function loadCapabilities(explicitPath) {
   return null;
 }
 
+function supportsServerSideToolInvocations(modelName) {
+    const normalized = String(modelName || '').toLowerCase();
+    return normalized.includes('gemini-3') || normalized.includes('gemini-4');
+}
+
 export class GeminiProvider {
   constructor(apiKey, systemInstruction, options = {}) {
     const { capabilitiesPath } = options
@@ -44,6 +49,13 @@ export class GeminiProvider {
     
     if (!finalConfig.systemInstruction) {
         finalConfig.systemInstruction = this.defaultSystemInstruction;
+    }
+
+    if (supportsServerSideToolInvocations(modelName)) {
+        finalConfig.toolConfig = {
+            ...(finalConfig.toolConfig || {}),
+            includeServerSideToolInvocations: true,
+        };
     }
     
     return finalConfig;

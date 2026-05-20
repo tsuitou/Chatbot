@@ -159,12 +159,11 @@ const DUMMY_MODEL_NAME = 'dummy'
 
 // Agent model definitions: virtual name -> actual base model mapping
 const AGENT_MODELS = {
-  'agent-gemini-3-flash-preview': 'gemini-3-flash-preview',
+  'agent-deep-research': true,
 }
 
 // Helper to check if a model name is an agent model
 const isAgentModel = (modelName) => modelName in AGENT_MODELS
-const getAgentBaseModel = (modelName) => AGENT_MODELS[modelName]
 
 // Ensure uploads dir exists for Multer temp files
 const uploadsDir = path.resolve(runtimeDirname, 'uploads')
@@ -228,6 +227,13 @@ apiRouter.get(/^\/models\/(.+)\/config-ranges$/, async (req, res) => {
       return res.json({
         temperature: { min: 0.0, max: 0.0 },
         topP: { min: 0.0, max: 0.0 },
+        maxOutputTokens: { max: 0 },
+      })
+    }
+    if (isAgentModel(normalizeModelName(modelName))) {
+      return res.json({
+        temperature: { min: 0.0, max: 0.0 },
+        topP: { min: 0.0, max: 1.0 },
         maxOutputTokens: { max: 0 },
       })
     }
@@ -306,15 +312,13 @@ io.on('connection', (socket) => {
 
       // Check if this is an agent model
       if (isAgentModel(normalizedModel)) {
-        const userSelectedModel = getAgentBaseModel(normalizedModel)
-        const configWithModel = { ...(config || {}), model: userSelectedModel }
         const agentBaseModel = process.env.AGENT_BASE_MODEL
         await runAgentSession({
           apiKey,
           baseModel: agentBaseModel,
           defaultSystemInstruction,
           userSystemInstruction: config?.systemInstruction,
-          requestConfig: configWithModel,
+          requestConfig: config || {},
           contents,
           socket,
           chatId,

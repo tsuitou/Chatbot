@@ -15,6 +15,7 @@ import { createAttachmentBucket } from '../services/attachments'
 import { useChatConfigStore } from './chatConfig'
 import { applyResponseTransforms } from '../services/responseTransforms'
 import { useDebugStore } from './debug'
+import { createDefaultToolSettings } from '../config/defaultTools'
 import {
   createModelMessage,
   createUserMessage,
@@ -96,11 +97,7 @@ export const useChatStore = defineStore('chat', {
       prompt: '',
       model: null,
       streamingEnabled: true,
-      tools: {
-        useUrlContext: true,
-        useGrounding: false,
-        useCodeExecution: false,
-      },
+      tools: createDefaultToolSettings(),
       providerId: getDefaultProviderId(),
       attachmentBucket: createAttachmentBucket(),
     },
