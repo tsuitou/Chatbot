@@ -37,12 +37,17 @@ onMounted(async () => {
     }
     chatStore.setAvailableModels(availableModels)
     const preferredDefaultModel = await getDefaultModel()
-    let defaultModel = availableModels[0]
-    if (availableModels.includes(preferredDefaultModel)) {
-      defaultModel = preferredDefaultModel
-    }
+    const groups = chatStore.availableModels
+    const allModels = chatStore.allAvailableModels
+    const firstRealModel =
+      groups.find((group) => group.provider !== 'virtual')?.models?.[0] ||
+      allModels[0]
+    const defaultModel = allModels.includes(preferredDefaultModel)
+      ? preferredDefaultModel
+      : firstRealModel
     chatStore.setDefaultModel(defaultModel)
     chatStore.setActiveModel(defaultModel)
+    chatStore.setProviderId(chatStore.findProviderForModel(defaultModel))
     chatConfigStore.prepareForNewChat({
       systemPrompt: chatStore.currentRequestConfig.systemInstruction || '',
     })

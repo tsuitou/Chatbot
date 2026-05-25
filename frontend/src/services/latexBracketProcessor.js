@@ -116,7 +116,11 @@ function findDelimited(source, start, open, close) {
     const nextClose = source.indexOf(close, cursor)
     if (nextClose === -1) return null
 
-    if (nextOpen !== -1 && nextOpen < nextClose && !isEscaped(source, nextOpen)) {
+    if (
+      nextOpen !== -1 &&
+      nextOpen < nextClose &&
+      !isEscaped(source, nextOpen)
+    ) {
       depth += 1
       cursor = nextOpen + open.length
       continue

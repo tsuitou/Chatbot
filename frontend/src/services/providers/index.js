@@ -1,7 +1,9 @@
 import * as gemini from './gemini'
+import * as claude from './claude'
 
 const registry = {
   [gemini.id]: gemini,
+  [claude.id]: claude,
 }
 
 const fallbackProviderId = gemini.id

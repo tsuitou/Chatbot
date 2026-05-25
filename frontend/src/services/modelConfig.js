@@ -1,17 +1,10 @@
-const knownParameterKeys = [
+const LEGACY_FLAT_KEYS = [
   'temperature',
   'topP',
   'maxOutputTokens',
   'thinkingBudget',
   'thinkingLevel',
 ]
-
-const numericParameterKeys = new Set([
-  'temperature',
-  'topP',
-  'maxOutputTokens',
-  'thinkingBudget',
-])
 
 /**
  * Create a deep-cloned, mutable copy of the default empty settings object.
@@ -25,26 +18,26 @@ export function createEmptySettings() {
   }
 }
 
-function coerceNumber(value) {
+function coerceParameterValue(value) {
   if (value === '' || value === null || value === undefined) return undefined
   const num = Number(value)
-  return Number.isFinite(num) ? num : undefined
+  return Number.isFinite(num) ? num : value
 }
 
 function pickParametersFromLegacy(raw) {
-  const next = {}
-  for (const key of knownParameterKeys) {
+  const legacy = {}
+  for (const key of LEGACY_FLAT_KEYS) {
     if (raw && raw[key] !== undefined) {
-      next[key] = numericParameterKeys.has(key)
-        ? coerceNumber(raw[key])
-        : raw[key]
+      legacy[key] = raw[key]
     }
   }
-  if (raw?.parameters && typeof raw.parameters === 'object') {
-    for (const [key, value] of Object.entries(raw.parameters)) {
-      if (next[key] !== undefined) continue
-      next[key] = numericParameterKeys.has(key) ? coerceNumber(value) : value
-    }
+  const params =
+    raw?.parameters && typeof raw.parameters === 'object' ? raw.parameters : {}
+  const merged = { ...legacy, ...params }
+  const next = {}
+  for (const [key, value] of Object.entries(merged)) {
+    const coerced = coerceParameterValue(value)
+    if (coerced !== undefined) next[key] = coerced
   }
   return next
 }

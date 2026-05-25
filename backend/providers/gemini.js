@@ -1,43 +1,22 @@
 import { GoogleGenAI } from '@google/genai'
-import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import {
+  buildConfigRanges,
+  getEffectiveCapabilities,
+  loadCapabilities,
+} from './capabilities.js'
+import { supportsServerSideToolInvocations, normalizeGeminiUsage } from './shared.js'
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
-
-function loadCapabilities(explicitPath) {
-  const candidates = [
-    explicitPath,
-    path.resolve(process.cwd(), 'backend/capabilities/gemini.json'),
-    path.resolve(process.cwd(), 'capabilities/gemini.json'), // If cwd is backend/
-    path.resolve(runtimeDirname, '../capabilities/gemini.json') // Relative to provider file
-  ].filter(Boolean);
-
-  for (const capPath of candidates) {
-    try {
-      if (fs.existsSync(capPath)) {
-        return JSON.parse(fs.readFileSync(capPath, 'utf-8'));
-      }
-    } catch (e) {
-      console.warn(`Failed to load capabilities from ${capPath}:`, e);
-    }
-  }
-  console.warn('No capabilities file found for Gemini.');
-  return null;
-}
-
-function supportsServerSideToolInvocations(modelName) {
-    const normalized = String(modelName || '').toLowerCase();
-    return normalized.includes('gemini-3') || normalized.includes('gemini-4');
-}
 
 export class GeminiProvider {
   constructor(apiKey, systemInstruction, options = {}) {
     const { capabilitiesPath } = options
     this.genAI = new GoogleGenAI({ apiKey })
     this.defaultSystemInstruction = systemInstruction
-    this.capabilities = loadCapabilities(capabilitiesPath);
+    this.capabilities = loadCapabilities('gemini', capabilitiesPath, runtimeDirname);
   }
 
   setDefaultSystemInstruction(systemInstruction) {
@@ -57,6 +36,42 @@ export class GeminiProvider {
             includeServerSideToolInvocations: true,
         };
     }
+
+    const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
+    const ranges = buildConfigRanges(parameters, features)
+
+    if (finalConfig.temperature === undefined || finalConfig.temperature === null) {
+      if (ranges.temperature && ranges.temperature.default !== undefined) {
+        finalConfig.temperature = ranges.temperature.default
+      }
+    }
+
+    if (finalConfig.topP === undefined || finalConfig.topP === null) {
+      if (ranges.topP && ranges.topP.default !== undefined) {
+        finalConfig.topP = ranges.topP.default
+      }
+    }
+
+    if (finalConfig.topK === undefined || finalConfig.topK === null) {
+      if (ranges.topK && ranges.topK.default !== undefined) {
+        finalConfig.topK = ranges.topK.default
+      }
+    }
+
+    if (finalConfig.maxOutputTokens === undefined || finalConfig.maxOutputTokens === null) {
+      if (ranges.maxOutputTokens && ranges.maxOutputTokens.default !== undefined) {
+        finalConfig.maxOutputTokens = ranges.maxOutputTokens.default
+      }
+    }
+
+    if (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined) {
+      if (!finalConfig.thinkingConfig) {
+        finalConfig.thinkingConfig = {}
+      }
+      if (finalConfig.thinkingConfig.thinkingBudget === undefined || finalConfig.thinkingConfig.thinkingBudget === null) {
+        finalConfig.thinkingConfig.thinkingBudget = ranges.thinkingBudget.default
+      }
+    }
     
     return finalConfig;
   }
@@ -72,22 +87,17 @@ export class GeminiProvider {
       ...(isImageModel ? {} : { config: normalizedConfig }),
     }
     
-    try {
-        const stream = await this.genAI.models.generateContentStream(request);
-        
-        for await (const chunk of stream) {
-            yield {
-                chatId,
-                requestId,
-                parts: chunk.candidates?.[0]?.content?.parts,
-                usage: chunk.usageMetadata,
-                finishReason: chunk.candidates?.[0]?.finishReason,
-                grounding: chunk.candidates?.[0]?.groundingMetadata,
-                provider: 'gemini'
-            }
+    const stream = await this.genAI.models.generateContentStream(request);
+    for await (const chunk of stream) {
+        yield {
+            chatId,
+            requestId,
+            parts: chunk.candidates?.[0]?.content?.parts,
+            usage: normalizeGeminiUsage(chunk.usageMetadata),
+            finishReason: chunk.candidates?.[0]?.finishReason,
+            grounding: chunk.candidates?.[0]?.groundingMetadata,
+            provider: 'gemini'
         }
-    } catch (error) {
-        throw error;
     }
   }
   
@@ -107,7 +117,7 @@ export class GeminiProvider {
           chatId,
           requestId,
           parts: result?.candidates?.[0]?.content?.parts,
-          usage: result?.usageMetadata,
+          usage: normalizeGeminiUsage(result?.usageMetadata),
           finishReason: result?.candidates?.[0]?.finishReason,
           grounding: result?.candidates?.[0]?.groundingMetadata,
           provider: 'gemini'
@@ -134,13 +144,11 @@ export class GeminiProvider {
       return file;
   }
 
-  async listModels(filterKeywords = []) {
+  async listModels() {
       const pager = await this.genAI.models.list();
       const names = [];
       for await (const m of pager) {
-          if (filterKeywords.length === 0 || filterKeywords.some(k => m.name.includes(k.trim()))) {
-              names.push(m.name.replace(/^models\//, ''));
-          }
+          names.push(m.name.replace(/^models\//, ''));
       }
       return names;
   }
@@ -161,32 +169,7 @@ export class GeminiProvider {
           ranges.maxOutputTokens = { type: 'integer', label: 'Max Output Tokens', min: 1, max: maxOutputTokens };
      }
 
-     const models = Array.isArray(this.capabilities?.models) ? this.capabilities.models : [];
-     const capModel = models.find(m => modelName.includes(m.modelQuery));
-     
-     const capDefaults = this.capabilities?.defaults?.parameters || {};
-     const capDefaultFeatures = this.capabilities?.defaults?.features || {};
-     
-     const effectiveParams = { ...capDefaults, ...(capModel?.parameters || {}) };
-     const effectiveFeatures = { ...capDefaultFeatures, ...(capModel?.features || {}) };
-     
-     ranges.features = effectiveFeatures;
-
-     for (const [key, def] of Object.entries(effectiveParams)) {
-         if (def.range) {
-             ranges[key] = { ...(ranges[key] || {}), ...def.range };
-         } else if (def.options) {
-             ranges[key] = { ...(ranges[key] || {}), options: def.options };
-         }
-         
-         if (def.specialValues) {
-             ranges[key] = { ...(ranges[key] || {}), specialValues: def.specialValues };
-         }
-
-         if (def.type) ranges[key] = { ...(ranges[key] || {}), type: def.type };
-         if (def.label) ranges[key] = { ...(ranges[key] || {}), label: def.label };
-     }
-     
-     return ranges;
+     const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
+     return buildConfigRanges(parameters, features, ranges);
   }
 }

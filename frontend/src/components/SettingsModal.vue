@@ -24,13 +24,19 @@
               v-model="selectedModel"
               class="select-input"
             >
-              <option
-                v-for="model in availableModels"
-                :key="model"
-                :value="model"
+              <optgroup
+                v-for="group in availableModels"
+                :key="group.provider"
+                :label="group.label"
               >
-                {{ model }}
-              </option>
+                <option
+                  v-for="model in group.models"
+                  :key="model"
+                  :value="model"
+                >
+                  {{ model }}
+                </option>
+              </optgroup>
             </select>
           </fieldset>
 
@@ -74,7 +80,15 @@
                   v-model="currentSettings.parameters[param.key]"
                   class="select-input"
                 >
-                  <option :value="undefined">Default</option>
+                  <option :value="undefined">
+                    Default
+                    <template v-if="param.default !== undefined">
+                      ({{
+                        param.options?.find((o) => o.value === param.default)
+                          ?.label || param.default
+                      }})
+                    </template>
+                  </option>
                   <option
                     v-for="opt in param.options"
                     :key="opt.value"
@@ -86,8 +100,8 @@
               </div>
             </div>
 
-            <!-- Explicitly handle 'includeThoughts' if any thinking parameter is present -->
-            <label v-if="hasThinkingParameter" class="form-option">
+            <!-- Show 'includeThoughts' only when capabilities explicitly enable it -->
+            <label v-if="supportsIncludeThoughts" class="form-option">
               <input
                 v-model="currentSettings.options.includeThoughts"
                 type="checkbox"
@@ -98,15 +112,13 @@
 
           <fieldset v-if="supportsSystemInstruction" class="form-section">
             <legend class="field-legend">System Prompt</legend>
-            <label class="form-label" for="system-prompt"
-              >Custom Instruction</label
-            >
+            <label class="form-label" for="system-prompt">System Prompt</label>
             <textarea
               id="system-prompt"
               v-model="currentSettings.systemPrompt"
               class="textarea-input"
               rows="6"
-              placeholder="Enter custom system instructions..."
+              placeholder="Enter a system prompt..."
             ></textarea>
           </fieldset>
         </form>
@@ -126,6 +138,7 @@ import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { getConfigRanges } from '../services/api'
 import { showSuccessToast } from '../services/notification'
+import * as db from '../services/db'
 import {
   createEmptySettings,
   normalizeSettingsEntry,
@@ -152,14 +165,17 @@ const handleGlobalMouseUp = () => {
   shouldCancelOverlayClose.value = false
 }
 
-const fallbackProviderId = () =>
-  store.composerState.providerId || getDefaultProviderId()
+const allModels = computed(() => store.allAvailableModels)
 
-const ensureProvider = (settings) => {
+const fallbackProviderId = (modelName = selectedModel.value) =>
+  modelName
+    ? store.findProviderForModel(modelName)
+    : store.composerState.providerId || getDefaultProviderId()
+
+const ensureProvider = (settings, modelName = selectedModel.value) => {
   const next = cloneSettings(settings)
-  if (!next.providerId) {
-    next.providerId = fallbackProviderId()
-  }
+  next.providerId =
+    store.findProviderForModel(modelName) || fallbackProviderId(modelName)
   return next
 }
 
@@ -173,14 +189,14 @@ const persistCurrentSettings = (modelName) => {
 
 const loadSettingsForModel = (modelName) => {
   if (!modelName) {
-    currentSettings.value = ensureProvider(createEmptySettings())
+    currentSettings.value = ensureProvider(createEmptySettings(), modelName)
     return
   }
   const stored = allModelSettings.value[modelName]
   if (stored) {
-    currentSettings.value = ensureProvider(stored)
+    currentSettings.value = ensureProvider(stored, modelName)
   } else {
-    currentSettings.value = ensureProvider(createEmptySettings())
+    currentSettings.value = ensureProvider(createEmptySettings(), modelName)
   }
 }
 
@@ -191,7 +207,8 @@ const fetchConfigRangesForModel = async (modelName) => {
   }
   isLoadingRanges.value = true
   try {
-    configRanges.value = await getConfigRanges(modelName)
+    const providerId = store.findProviderForModel(modelName)
+    configRanges.value = await getConfigRanges(modelName, providerId)
   } catch (error) {
     console.error('Failed to fetch config ranges:', error)
     configRanges.value = {}
@@ -215,6 +232,7 @@ const dynamicParameters = computed(() => {
       max: ranges.temperature.max,
       step: ranges.temperature.step || 0.1,
       hint: `${ranges.temperature.min} - ${ranges.temperature.max}`,
+      default: ranges.temperature.default,
     })
   }
 
@@ -227,6 +245,20 @@ const dynamicParameters = computed(() => {
       max: ranges.topP.max,
       step: ranges.topP.step || 0.01,
       hint: `${ranges.topP.min} - ${ranges.topP.max}`,
+      default: ranges.topP.default,
+    })
+  }
+
+  if (ranges.topK) {
+    params.push({
+      key: 'topK',
+      label: 'Top K',
+      type: 'number',
+      min: ranges.topK.min,
+      max: ranges.topK.max,
+      step: ranges.topK.step || 1,
+      hint: `${ranges.topK.min} - ${ranges.topK.max}`,
+      default: ranges.topK.default,
     })
   }
 
@@ -238,32 +270,51 @@ const dynamicParameters = computed(() => {
       min: 1,
       max: ranges.maxOutputTokens.max,
       hint: `1 - ${ranges.maxOutputTokens.max}`,
+      default: ranges.maxOutputTokens.default,
     })
   }
 
   if (ranges.thinkingBudget) {
     const r = ranges.thinkingBudget
-    let rangeStr = '(N/A)'
-    if (r.ranges && Array.isArray(r.ranges)) {
-      rangeStr = r.ranges
-        .map((x) => (typeof x === 'object' ? `${x.min}-${x.max}` : x))
-        .join(', ')
-    } else if (r.min !== undefined && r.max !== undefined) {
-      const parts = []
-      if (r.specialValues && Array.isArray(r.specialValues)) {
-        parts.push(...r.specialValues.map((v) => `${v.label} (${v.value})`))
-      }
-      parts.push(`${r.min} - ${r.max}`)
-      rangeStr = parts.join(', ')
-    }
+    const hasRange = r.min !== undefined && r.max !== undefined
+    const hasSpecialValues =
+      Array.isArray(r.specialValues) && r.specialValues.length > 0
 
-    params.push({
-      key: 'thinkingBudget',
-      label: 'Thinking Budget',
-      type: 'number',
-      hint: rangeStr,
-      disabled: rangeStr === '(N/A)',
-    })
+    if (!hasRange && hasSpecialValues) {
+      params.push({
+        key: 'thinkingBudget',
+        label: r.label || 'Thinking Mode',
+        type: 'enum',
+        options: r.specialValues,
+        default: r.default,
+      })
+    } else {
+      let rangeStr = '(N/A)'
+      if (r.ranges && Array.isArray(r.ranges)) {
+        rangeStr = r.ranges
+          .map((x) => (typeof x === 'object' ? `${x.min}-${x.max}` : x))
+          .join(', ')
+      } else if (hasRange) {
+        const parts = []
+        if (hasSpecialValues) {
+          parts.push(...r.specialValues.map((v) => `${v.label} (${v.value})`))
+        }
+        parts.push(`${r.min} - ${r.max}`)
+        rangeStr = parts.join(', ')
+      }
+
+      params.push({
+        key: 'thinkingBudget',
+        label: r.label || 'Thinking Budget',
+        type: 'number',
+        min: r.min,
+        max: r.max,
+        step: r.step || 256,
+        hint: rangeStr,
+        disabled: rangeStr === '(N/A)',
+        default: r.default,
+      })
+    }
   }
 
   // Check specific keys known to be Enums
@@ -274,6 +325,7 @@ const dynamicParameters = computed(() => {
         label: 'Thinking Level',
         type: 'enum',
         options: ranges[key].options,
+        default: ranges[key].default,
       })
     }
   })
@@ -281,9 +333,8 @@ const dynamicParameters = computed(() => {
   return params
 })
 
-const hasThinkingParameter = computed(() => {
-  const ranges = configRanges.value || {}
-  return !!(ranges.thinkingBudget || ranges.thinkingLevel)
+const supportsIncludeThoughts = computed(() => {
+  return configRanges.value?.features?.includeThoughts === true
 })
 
 const supportsSystemInstruction = computed(() => {
@@ -292,9 +343,9 @@ const supportsSystemInstruction = computed(() => {
   return features?.systemInstruction !== false
 })
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('mouseup', handleGlobalMouseUp)
-  const stored = JSON.parse(localStorage.getItem('modelSettings') || '{}')
+  const stored = await db.getModelSettings()
   const normalized = {}
   for (const [modelName, entry] of Object.entries(stored)) {
     normalized[modelName] = normalizeSettingsEntry(entry, {
@@ -304,7 +355,11 @@ onMounted(() => {
   allModelSettings.value = normalized
 
   const modelToShow =
-    store.composerState.model || availableModels.value[0] || ''
+    store.composerState.model ||
+    availableModels.value.find((group) => group.provider !== 'virtual')
+      ?.models?.[0] ||
+    allModels.value[0] ||
+    ''
   selectedModel.value = modelToShow
   loadSettingsForModel(modelToShow)
   fetchConfigRangesForModel(modelToShow)
@@ -357,7 +412,7 @@ const handleOverlayMouseLeave = (event) => {
   shouldCancelOverlayClose.value = true
 }
 
-const save = () => {
+const save = async () => {
   if (!selectedModel.value) {
     showSuccessToast('Changes saved.')
     emit('close')
@@ -372,8 +427,8 @@ const save = () => {
   }
   serialized[selectedModel.value] = serializeSettings(currentSettings.value)
 
-  localStorage.setItem('modelSettings', JSON.stringify(serialized))
-  store.refreshModelSettings()
+  await db.putModelSettings(serialized)
+  store.setModelSettings(serialized)
   showSuccessToast('Changes saved.')
   emit('close')
 }

@@ -2,6 +2,8 @@ import { GoogleGenAI } from '@google/genai'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { makeResolveFirstExisting } from '../utils.js'
+import { supportsServerSideToolInvocations, normalizeGeminiUsage } from '../providers/shared.js'
 
 const DEFAULT_RETENTION_DAYS = 55
 const AGENT_TOOLS_FILE = 'agent-tools.json'
@@ -11,17 +13,7 @@ const runtimeDirname = path.dirname(runtimeFilename)
 const backendRoot = path.resolve(runtimeDirname, '..')
 const projectRoot = path.resolve(backendRoot, '..')
 const baseDirs = Array.from(new Set([runtimeDirname, backendRoot, projectRoot, process.cwd()]))
-
-const resolveFirstExisting = (relativePath, type = 'file') => {
-  for (const dir of baseDirs) {
-    const candidate = path.resolve(dir, relativePath)
-    try {
-      const stat = fs.statSync(candidate)
-      if (type === 'dir' ? stat.isDirectory() : stat.isFile()) return candidate
-    } catch {}
-  }
-  return null
-}
+const resolveFirstExisting = makeResolveFirstExisting(baseDirs)
 
 function normalizeDateOnly(date = new Date()) {
   return date.toISOString().slice(0, 10)
@@ -31,11 +23,6 @@ function addDays(date, days) {
   const next = new Date(date)
   next.setUTCDate(next.getUTCDate() + days)
   return next
-}
-
-function supportsServerSideToolInvocations(modelName) {
-  const normalized = String(modelName || '').toLowerCase()
-  return normalized.includes('gemini-3') || normalized.includes('gemini-4')
 }
 
 function resolveRetentionDays() {
@@ -513,7 +500,7 @@ async function streamAgentModelTurn({
       chatId,
       requestId,
       parts: chunk?.candidates?.[0]?.content?.parts,
-      usage: chunk?.usageMetadata,
+      usage: normalizeGeminiUsage(chunk?.usageMetadata),
       finishReason: chunk?.candidates?.[0]?.finishReason,
       grounding: chunk?.candidates?.[0]?.groundingMetadata,
       provider: 'gemini',

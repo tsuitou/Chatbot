@@ -9,7 +9,10 @@ import readline from 'readline'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
+import { ClaudeProvider } from './providers/claude.js'
+import { createProviderRegistry } from './providers/registry.js'
 import { runAgentSession } from './agent/runner.js'
+import { makeResolveFirstExisting } from './utils.js'
 
 const normalizeBasePath = (raw) => {
   if (!raw || typeof raw !== 'string') return '/chatbot'
@@ -25,17 +28,7 @@ const runtimeDirname = path.dirname(runtimeFilename)
 const projectRoot = path.resolve(runtimeDirname, '..')
 
 const baseDirs = Array.from(new Set([runtimeDirname, projectRoot, process.cwd()]))
-
-const resolveFirstExisting = (relativePath, type = 'file') => {
-  for (const dir of baseDirs) {
-    const candidate = path.resolve(dir, relativePath)
-    try {
-      const stat = fs.statSync(candidate)
-      if (type === 'dir' ? stat.isDirectory() : stat.isFile()) return candidate
-    } catch {}
-  }
-  return null
-}
+const resolveFirstExisting = makeResolveFirstExisting(baseDirs)
 
 function resolveEnvPath() {
   if (process.env.APP_ENV_FILE) {
@@ -96,9 +89,32 @@ const io = new Server(httpServer, {
   path: SOCKET_PATH,
 })
 
-function resolveApiKey() {
-  const envKey = (process.env.GEMINI_API_KEY || '').trim()
-  if (envKey) return envKey
+function parseKeyFile(raw) {
+  const trimmed = raw.trim()
+  if (!trimmed) return {}
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (parsed && typeof parsed === 'object') {
+      return {
+        gemini: String(parsed.gemini || '').trim(),
+        claude: String(parsed.claude || parsed.anthropic || '').trim(),
+      }
+    }
+  } catch {}
+  // Plain text: auto-detect provider by key prefix
+  if (trimmed.startsWith('sk-ant-')) return { claude: trimmed }
+  return { gemini: trimmed }
+}
+
+function hasProviderKey(keys) {
+  return Boolean(keys?.gemini || keys?.claude)
+}
+
+function resolveProviderKeys() {
+  const keys = {
+    gemini: (process.env.GEMINI_API_KEY || '').trim(),
+    claude: (process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim(),
+  }
 
   // First check for key_valid files
   const validCandidatePaths = Array.from(new Set([
@@ -108,8 +124,9 @@ function resolveApiKey() {
 
   for (const keyPath of validCandidatePaths) {
     try {
-      const raw = fs.readFileSync(keyPath, 'utf-8').trim()
-      if (raw) return raw
+      const parsed = parseKeyFile(fs.readFileSync(keyPath, 'utf-8'))
+      keys.gemini ||= parsed.gemini || ''
+      keys.claude ||= parsed.claude || ''
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
     }
@@ -124,7 +141,8 @@ function resolveApiKey() {
   for (const keyPath of candidatePaths) {
     try {
       const raw = fs.readFileSync(keyPath, 'utf-8').trim()
-      if (raw && raw.length > 10) { // Basic check for non-empty key
+      const parsed = parseKeyFile(raw)
+      if (hasProviderKey(parsed)) {
         // Rename key to key_valid to prevent accidental distribution
         const validKeyPath = keyPath.replace(/key$/, 'key_valid')
         try {
@@ -133,27 +151,41 @@ function resolveApiKey() {
         } catch (renameError) {
           console.warn(`Could not rename key file: ${renameError.message}`)
         }
-        return raw
+        keys.gemini ||= parsed.gemini || ''
+        keys.claude ||= parsed.claude || ''
       }
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
     }
   }
 
-  return null
+  return keys
 }
 
-const apiKey = resolveApiKey()
-if (!apiKey) {
-  throw new Error('GEMINI_API_KEY is not set and no key file found')
+const providerKeys = resolveProviderKeys()
+if (!providerKeys.gemini && !providerKeys.claude) {
+  throw new Error('No provider API key found. Set GEMINI_API_KEY or CLAUDE_API_KEY.')
 }
 
-const filterKeywords = (process.env.MODEL_FILTER || '').split(',')
+const modelFilterKeywords = (process.env.MODEL_FILTER || '')
+  .split(',')
+  .map((keyword) => keyword.trim().toLowerCase())
+  .filter(Boolean)
 const connectionInfo = {}
 
 // Initialize Provider
-const capabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
-const geminiProvider = new GeminiProvider(apiKey, defaultSystemInstruction, { capabilitiesPath });
+const geminiCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
+const claudeCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'claude.json'), 'file')
+const geminiProvider = providerKeys.gemini
+  ? new GeminiProvider(providerKeys.gemini, defaultSystemInstruction, { capabilitiesPath: geminiCapabilitiesPath })
+  : null
+const claudeProvider = providerKeys.claude
+  ? new ClaudeProvider(providerKeys.claude, defaultSystemInstruction, { capabilitiesPath: claudeCapabilitiesPath })
+  : null
+const providerRegistry = createProviderRegistry([
+  { id: 'gemini', label: 'Google Gemini', provider: geminiProvider },
+  { id: 'claude', label: 'Anthropic Claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
+])
 
 const DUMMY_MODEL_NAME = 'dummy'
 
@@ -173,6 +205,16 @@ const upload = multer({ dest: uploadsDir })
 
 // --- Helpers ---
 const normalizeModelName = (name) => (name || '').replace(/^models\//, '')
+const resolveProviderId = (modelName, hint) =>
+  providerRegistry.resolveProviderId(modelName, hint) || 'gemini'
+const filterModelNames = (names = []) => {
+  const list = Array.isArray(names) ? names : []
+  if (!modelFilterKeywords.length) return list
+  return list.filter((name) => {
+    const normalized = String(name || '').toLowerCase()
+    return modelFilterKeywords.some((keyword) => normalized.includes(keyword))
+  })
+}
 const numberOr = (v, fallback) => {
   const n = Number(v)
   return Number.isFinite(n) ? n : fallback
@@ -188,15 +230,26 @@ app.get(`${BASE_PATH}/healthz`, (_req, res) => res.json({ ok: true }))
 // List models
 apiRouter.get('/models', async (_req, res) => {
   try {
-    const names = await geminiProvider.listModels(filterKeywords);
-    if (!names.includes(DUMMY_MODEL_NAME)) names.unshift(DUMMY_MODEL_NAME);
+    const groups = [
+      {
+        provider: 'virtual',
+        label: 'Special',
+        models: [
+          DUMMY_MODEL_NAME,
+          ...(geminiProvider ? Object.keys(AGENT_MODELS) : []),
+        ],
+      },
+    ]
 
-    // Add all agent models to the list
-    for (const agentModel of Object.keys(AGENT_MODELS).reverse()) {
-      if (!names.includes(agentModel)) names.unshift(agentModel);
+    for (const group of providerRegistry.groups()) {
+      groups.push({
+        provider: group.provider,
+        label: group.label,
+        models: filterModelNames(await group.models),
+      })
     }
 
-    res.json(names)
+    res.json(groups.filter(group => group.models.length > 0))
   } catch (error) {
     console.error('models list error:', error?.status, error?.message)
     res.status(500).json({ error: 'Failed to fetch models', message: error?.message })
@@ -237,8 +290,14 @@ apiRouter.get(/^\/models\/(.+)\/config-ranges$/, async (req, res) => {
         maxOutputTokens: { max: 0 },
       })
     }
-    
-    const ranges = await geminiProvider.getModelConfigRanges(modelName);
+
+    const providerId = resolveProviderId(modelName, req.query.provider)
+    const ranges = await providerRegistry
+      .get(providerId)
+      ?.getModelConfigRanges(modelName)
+    if (!ranges) {
+      return res.status(404).json({ error: 'Provider not available', message: 'Provider not available for model.' })
+    }
     res.json(ranges);
   } catch (error) {
     console.error('config-ranges error:', error?.status, error?.message)
@@ -249,6 +308,7 @@ apiRouter.get(/^\/models\/(.+)\/config-ranges$/, async (req, res) => {
 // Upload file via Files API
 apiRouter.post('/files/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.', message: 'No file uploaded.' })
+  if (!geminiProvider) return res.status(503).json({ error: 'Gemini provider unavailable', message: 'Gemini provider unavailable.' })
 
   try {
     const file = await geminiProvider.uploadFile(req.file.path, req.file.mimetype, req.file.originalname);
@@ -289,7 +349,9 @@ io.on('connection', (socket) => {
 	
   socket.on('start_generation', async (data) => {
     const {
+      provider,
       contents,
+      messages,
       model: modelName,
       config,
       streaming,
@@ -306,15 +368,17 @@ io.on('connection', (socket) => {
 		console.log(connectionInfo)
     try {
       if (!modelName) throw new Error('model is required')
-      if (!Array.isArray(contents)) throw new Error('contents must be an array')
       
       const normalizedModel = normalizeModelName(modelName)
+      const providerId = resolveProviderId(normalizedModel, provider)
 
       // Check if this is an agent model
       if (isAgentModel(normalizedModel)) {
+        if (!providerKeys.gemini) throw new Error('Gemini API key is required for agent models')
+        if (!Array.isArray(contents)) throw new Error('contents must be an array')
         const agentBaseModel = process.env.AGENT_BASE_MODEL
         await runAgentSession({
-          apiKey,
+          apiKey: providerKeys.gemini,
           baseModel: agentBaseModel,
           defaultSystemInstruction,
           userSystemInstruction: config?.systemInstruction,
@@ -338,14 +402,18 @@ io.on('connection', (socket) => {
         return
       }
 
+      const providerInstance = providerRegistry.get(providerId)
+      if (!providerInstance) throw new Error(`${providerId || 'Requested'} provider is not configured`)
+      const history = messages ?? contents
+      if (!Array.isArray(history)) throw new Error('messages must be an array')
       if (streaming) {
-        const stream = geminiProvider.generateStream(modelName, contents, config || {}, chatId, requestId);
+        const stream = providerInstance.generateStream(modelName, history, config || {}, chatId, requestId);
         for await (const chunk of stream) {
           socket.emit('chunk', chunk)
         }
         socket.emit('end_generation', { ok: true, chatId, requestId })
       } else {
-        const response = await geminiProvider.generate(modelName, contents, config || {}, chatId, requestId);
+        const response = await providerInstance.generate(modelName, history, config || {}, chatId, requestId);
         socket.emit('chunk', response)
         socket.emit('end_generation', { ok: true, chatId, requestId })
       }
@@ -368,7 +436,8 @@ const rl = readline.createInterface({
 rl.on('line', (input) => {
   if (input.trim() === 'rs') {
     reloadConfig();
-    geminiProvider.setDefaultSystemInstruction(defaultSystemInstruction)
+    geminiProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
+    claudeProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
   }
 });
 

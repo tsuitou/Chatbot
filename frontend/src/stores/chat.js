@@ -10,7 +10,7 @@ import {
   normalizeSettingsEntry,
   cloneSettings as cloneModelSettings,
 } from '../services/modelConfig'
-import { getDefaultProviderId } from '../services/providers'
+import { getDefaultProviderId, getProviderById } from '../services/providers'
 import { createAttachmentBucket } from '../services/attachments'
 import { useChatConfigStore } from './chatConfig'
 import { applyResponseTransforms } from '../services/responseTransforms'
@@ -31,6 +31,7 @@ import {
 
 const DEFAULT_TITLE = 'New Chat'
 const TITLE_MAX_LEN = 30
+const MAX_INLINE_ATTACHMENT_SIZE = 10 * 1024 * 1024
 
 const GenerationStatus = Object.freeze({
   IDLE: 'idle',
@@ -48,9 +49,7 @@ function recordDebugRequest(payload) {
   }
 }
 
-function readModelSettings(model, version, fallbackProviderId) {
-  void version
-  const all = JSON.parse(localStorage.getItem('modelSettings') || '{}')
+function readModelSettingsFromState(all, model, fallbackProviderId) {
   const raw = model && all[model] ? all[model] : null
   return normalizeSettingsEntry(raw, { fallbackProviderId })
 }
@@ -76,13 +75,39 @@ function cloneChatMeta(meta) {
   }
 }
 
+function normalizeModelGroups(input) {
+  if (!Array.isArray(input)) return []
+  if (input.every((item) => typeof item === 'string')) {
+    return [
+      {
+        provider: getDefaultProviderId(),
+        label: 'Google Gemini',
+        models: [...input],
+      },
+    ]
+  }
+  return input
+    .map((group) => ({
+      provider: group?.provider || getDefaultProviderId(),
+      label: group?.label || group?.provider || 'Models',
+      models: Array.isArray(group?.models) ? [...group.models] : [],
+    }))
+    .filter((group) => group.models.length > 0)
+}
+
+function flattenModelGroups(groups) {
+  return (Array.isArray(groups) ? groups : []).flatMap((group) =>
+    Array.isArray(group?.models) ? group.models : []
+  )
+}
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     appState: {
       initialized: false,
       availableModels: [],
       defaultModel: null,
-      modelSettingsVersion: 0,
+      modelSettingsByModel: {},
     },
     chatState: {
       list: [],
@@ -109,6 +134,8 @@ export const useChatStore = defineStore('chat', {
 
   getters: {
     availableModels: (state) => state.appState.availableModels,
+    allAvailableModels: (state) =>
+      flattenModelGroups(state.appState.availableModels),
     defaultModel: (state) => state.appState.defaultModel,
     chatList: (state) => state.chatState.list,
     activeChat(state) {
@@ -138,20 +165,26 @@ export const useChatStore = defineStore('chat', {
       const streaming = state.composerState.streamingEnabled
       const fallbackProviderId =
         state.composerState.providerId || getDefaultProviderId()
-      const normalized = readModelSettings(
+      const normalized = readModelSettingsFromState(
+        state.appState.modelSettingsByModel,
         model,
-        state.appState.modelSettingsVersion,
         fallbackProviderId
       )
       const settings = cloneModelSettings(normalized)
-      const providerId = settings.providerId || fallbackProviderId
+      const providerId = model
+        ? this.findProviderForModel(model)
+        : settings.providerId || fallbackProviderId
       const chatConfigStore = useChatConfigStore()
       const activeChatId = state.chatState.active?.meta?.id || null
       const systemInstruction = chatConfigStore.getSystemPrompt(activeChatId)
+      const provider = getProviderById(providerId)
+      const supportsTools =
+        provider?.supportedTools && provider.supportedTools.length > 0
+      const tools = supportsTools ? { ...state.composerState.tools } : {}
       return {
         providerId,
         model,
-        tools: { ...state.composerState.tools },
+        tools,
         parameters: { ...settings.parameters },
         options: { ...settings.options },
         systemInstruction,
@@ -161,8 +194,39 @@ export const useChatStore = defineStore('chat', {
   },
 
   actions: {
+    _attachmentPolicyForProvider(providerId = this.composerState.providerId) {
+      const provider = getProviderById(providerId)
+      const policy = provider?.attachmentPolicy || {
+        allowRemoteUpload: true,
+        allowedMimes: null,
+      }
+      return {
+        ...policy,
+        maxInlineFileSize: MAX_INLINE_ATTACHMENT_SIZE,
+      }
+    },
+
+    _createAttachmentBucket(options = {}) {
+      return createAttachmentBucket({
+        ...options,
+        policy: () =>
+          this._attachmentPolicyForProvider(
+            this.currentRequestConfig.providerId
+          ),
+        uploadFn: async (file, uploadOptions) => {
+          const provider = getProviderById(this.currentRequestConfig.providerId)
+          if (typeof provider.uploadAttachment !== 'function') {
+            throw new Error(
+              'Attachment upload is not supported for this provider.'
+            )
+          }
+          return provider.uploadAttachment(file, uploadOptions)
+        },
+      })
+    },
+
     setAvailableModels(models) {
-      this.appState.availableModels = Array.isArray(models) ? [...models] : []
+      this.appState.availableModels = normalizeModelGroups(models)
     },
 
     setDefaultModel(model) {
@@ -176,12 +240,27 @@ export const useChatStore = defineStore('chat', {
       this.composerState.model = typeof model === 'string' ? model : null
     },
 
+    findProviderForModel(model) {
+      for (const group of this.appState.availableModels || []) {
+        if (Array.isArray(group.models) && group.models.includes(model)) {
+          return group.provider || getDefaultProviderId()
+        }
+      }
+      return getDefaultProviderId()
+    },
+
     setStreamingEnabled(enabled) {
       this.composerState.streamingEnabled = !!enabled
     },
 
     setProviderId(providerId) {
       this.composerState.providerId = providerId || getDefaultProviderId()
+      const provider = getProviderById(this.composerState.providerId)
+      const supportsTools =
+        provider?.supportedTools && provider.supportedTools.length > 0
+      if (!supportsTools) {
+        this.composerState.tools = createDefaultToolSettings()
+      }
     },
 
     setPrompt(value) {
@@ -217,13 +296,19 @@ export const useChatStore = defineStore('chat', {
         (this.uiSignals.scrollToken + 1) % Number.MAX_SAFE_INTEGER
     },
 
-    refreshModelSettings() {
-      this.appState.modelSettingsVersion += 1
+    setModelSettings(settingsByModel = {}) {
+      this.appState.modelSettingsByModel = { ...settingsByModel }
     },
 
     async initializeApp() {
+      this.composerState.attachmentBucket = this._createAttachmentBucket()
       try {
-        this.chatState.list = await db.getChatList()
+        const [chatList, modelSettings] = await Promise.all([
+          db.getChatList(),
+          db.getModelSettings(),
+        ])
+        this.chatState.list = chatList
+        this.setModelSettings(modelSettings)
       } catch (error) {
         console.error('Failed to initialize app:', error)
         showErrorToast('Failed to load chat list. Please try again.')
@@ -467,9 +552,9 @@ export const useChatStore = defineStore('chat', {
       const model = this.composerState.model
       const fallbackProviderId =
         this.composerState.providerId || getDefaultProviderId()
-      const normalized = readModelSettings(
+      const normalized = readModelSettingsFromState(
+        this.appState.modelSettingsByModel,
         model,
-        this.appState.modelSettingsVersion,
         fallbackProviderId
       )
       const settings = cloneModelSettings(normalized)
@@ -496,12 +581,7 @@ export const useChatStore = defineStore('chat', {
       const providerId = stream.providerId || getDefaultProviderId()
       const parsed = apiAdapter.parseApiResponse(rawChunk, providerId) || {}
 
-      const deltaText =
-        parsed.deltaText ??
-        rawChunk.deltaText ??
-        rawChunk.delta?.text ??
-        rawChunk.text ??
-        ''
+      const deltaText = parsed.deltaText ?? ''
 
       setContentStreamingState(message, true)
 
@@ -512,11 +592,7 @@ export const useChatStore = defineStore('chat', {
         }
       }
 
-      const newAttachments = [
-        ...(parsed.newAttachments || []),
-        ...(rawChunk.delta?.attachments || []),
-        ...(rawChunk.attachments || []),
-      ]
+      const newAttachments = parsed.newAttachments || []
       if (newAttachments.length) {
         const existing = normalizeAttachments(
           message.attachments || [],
@@ -528,8 +604,7 @@ export const useChatStore = defineStore('chat', {
         )
       }
 
-      const thoughtDelta =
-        parsed.thoughtDelta ?? rawChunk.delta?.thoughts ?? rawChunk.thoughts
+      const thoughtDelta = parsed.thoughtDelta
       if (thoughtDelta) {
         message.runtime = message.runtime || {}
         message.runtime.system = message.runtime.system || {}
@@ -544,8 +619,6 @@ export const useChatStore = defineStore('chat', {
 
       if (parsed.metadata) {
         Object.assign(metadata, parsed.metadata)
-      } else if (rawChunk.metadata) {
-        Object.assign(metadata, rawChunk.metadata)
       }
 
       // Merge thought signatures (append unique by signature+index)
@@ -576,25 +649,18 @@ export const useChatStore = defineStore('chat', {
         metadata.thoughtSignatures = existing
       }
       mergeThoughtSignatures(message.metadata?.thoughtSignatures)
-      if (parsed.metadata?.thoughtSignatures) {
-        mergeThoughtSignatures(parsed.metadata.thoughtSignatures)
-      } else if (rawChunk.metadata?.thoughtSignatures) {
-        mergeThoughtSignatures(rawChunk.metadata.thoughtSignatures)
-      }
+      mergeThoughtSignatures(parsed.metadata?.thoughtSignatures)
 
-      if (!metadata.usage) {
-        const usage =
-          parsed.metadata?.usage ||
-          rawChunk.metadata?.usage ||
-          rawChunk.usage ||
-          rawChunk.delta?.usage
-        if (usage) {
-          metadata.usage = usage
+      const usage = parsed.metadata?.usage
+      if (usage) {
+        metadata.usage = {
+          ...(metadata.usage || {}),
+          ...usage,
         }
       }
 
-      if (parsed.finishReason || rawChunk.finishReason) {
-        metadata.finishReason = parsed.finishReason || rawChunk.finishReason
+      if (parsed.finishReason) {
+        metadata.finishReason = parsed.finishReason
       }
 
       if (Object.keys(metadata).length) {
@@ -719,7 +785,7 @@ export const useChatStore = defineStore('chat', {
       const message = this._findMessageById(messageId)
       if (!message) return
 
-      const bucket = createAttachmentBucket()
+      const bucket = this._createAttachmentBucket()
       bucket.replaceAll(
         normalizeAttachments(message.attachments ?? [], message.sender)
       )

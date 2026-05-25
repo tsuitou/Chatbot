@@ -72,6 +72,7 @@
           <font-awesome-icon icon="paperclip" />
         </button>
         <button
+          v-if="supportsTool('useUrlContext')"
           class="icon-button"
           :class="{ active: toolSettings.useUrlContext }"
           title="Enable Url Context"
@@ -80,6 +81,7 @@
           <font-awesome-icon icon="link" />
         </button>
         <button
+          v-if="supportsTool('useGrounding')"
           class="icon-button"
           :class="{ active: toolSettings.useGrounding }"
           title="Enable Search Grounding"
@@ -88,6 +90,7 @@
           <font-awesome-icon icon="search" />
         </button>
         <button
+          v-if="supportsTool('useCodeExecution')"
           class="icon-button"
           :class="{ active: toolSettings.useCodeExecution }"
           title="Enable Code Execution"
@@ -114,6 +117,7 @@ import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { getFileTypeIcon } from '../utils/fileIcons'
 import { BlobUrlManager } from '../utils/blobUrlManager'
+import { getProviderById } from '../services/providers'
 const store = useChatStore()
 const fileInput = ref(null)
 const promptInput = ref(null)
@@ -128,6 +132,11 @@ const prompt = computed({
 })
 
 const toolSettings = computed(() => store.composerState.tools)
+const supportsTool = (toolName) => {
+  const providerId = store.currentRequestConfig.providerId
+  const provider = getProviderById(providerId)
+  return provider?.supportedTools?.includes(toolName) ?? false
+}
 
 const attachments = computed(() => store.composerBucket.items)
 const isSending = computed(() => store.isGenerating)

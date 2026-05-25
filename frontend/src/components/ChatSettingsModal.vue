@@ -24,7 +24,7 @@
           <div class="settings-grid">
             <div class="settings-column">
               <fieldset class="form-section">
-                <legend class="field-legend">System Instruction</legend>
+                <legend class="field-legend">System Prompt</legend>
                 <label class="form-label" for="chat-system-prompt"
                   >System Prompt</label
                 >
@@ -33,7 +33,7 @@
                   v-model="form.systemPrompt"
                   class="textarea-input"
                   rows="6"
-                  placeholder="Custom instructions for the assistant"
+                  placeholder="Enter a system prompt..."
                 ></textarea>
               </fieldset>
               <fieldset class="form-section">

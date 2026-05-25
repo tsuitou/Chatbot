@@ -11,39 +11,6 @@
       <p v-else>Could not estimate storage usage.</p>
     </div>
 
-    <!-- LocalStorage -->
-    <div class="section">
-      <div class="section-header">
-        <h3>LocalStorage ({{ localStorageItems.length }} items)</h3>
-        <button class="danger-btn" @click="clearLocalStorage">Clear All</button>
-      </div>
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>Key</th>
-            <th>Value</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in localStorageItems" :key="item.key">
-            <td>{{ item.key }}</td>
-            <td>
-              <pre>{{ item.value }}</pre>
-            </td>
-            <td>
-              <button
-                class="danger-btn-sm"
-                @click="deleteLocalStorageItem(item.key)"
-              >
-                Delete
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
     <!-- IndexedDB -->
     <div class="section">
       <div class="section-header">
@@ -130,12 +97,17 @@ import * as db from '../services/db'
 const PAGE_SIZE = 50
 
 const storageEstimate = ref({ usage: null, quota: null })
-const localStorageItems = ref([])
 const dbFilter = ref('all')
 const currentPage = ref(1)
 const indexedDbRecords = ref([])
 const indexedDbTotal = ref(0)
-const recordCounts = ref({ all: 0, chat: 0, message: 0, attachment: 0 })
+const recordCounts = ref({
+  all: 0,
+  chat: 0,
+  message: 0,
+  attachment: 0,
+  setting: 0,
+})
 const isLoadingDbRecords = ref(false)
 const pageSize = PAGE_SIZE
 
@@ -148,6 +120,7 @@ const filterOptions = computed(() => [
     label: 'Attachment',
     count: recordCounts.value.attachment,
   },
+  { value: 'setting', label: 'Setting', count: recordCounts.value.setting },
 ])
 
 const totalPages = computed(() => {
@@ -168,32 +141,16 @@ const currentPageEnd = computed(() => {
 onMounted(async () => {
   const estimate = await getStorageEstimate()
   storageEstimate.value = { usage: estimate.usage, quota: estimate.quota }
-  loadLocalStorage()
   await refreshRecordCounts()
   await loadIndexedDbPage()
 })
-
-const loadLocalStorage = () => {
-  localStorageItems.value = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    try {
-      const value = JSON.parse(localStorage.getItem(key))
-      localStorageItems.value.push({
-        key,
-        value: JSON.stringify(value, null, 2),
-      })
-    } catch {
-      localStorageItems.value.push({ key, value: localStorage.getItem(key) })
-    }
-  }
-}
 
 const getCountForFilter = (counts, filter) => {
   if (filter === 'all') return counts.all
   if (filter === 'chat') return counts.chat
   if (filter === 'message') return counts.message
   if (filter === 'attachment') return counts.attachment
+  if (filter === 'setting') return counts.setting
   return 0
 }
 
@@ -203,7 +160,13 @@ const refreshRecordCounts = async () => {
     recordCounts.value = counts
   } catch (error) {
     console.error('Failed to load record counts:', error)
-    recordCounts.value = { all: 0, chat: 0, message: 0, attachment: 0 }
+    recordCounts.value = {
+      all: 0,
+      chat: 0,
+      message: 0,
+      attachment: 0,
+      setting: 0,
+    }
   }
 }
 
@@ -266,20 +229,6 @@ async function getStorageEstimate() {
     usage: estimate.usage,
     quota: estimate.quota,
   }
-}
-
-// --- Actions ---
-
-const clearLocalStorage = () => {
-  if (confirm('Are you sure you want to delete all LocalStorage data?')) {
-    localStorage.clear()
-    loadLocalStorage()
-  }
-}
-
-const deleteLocalStorageItem = (key) => {
-  localStorage.removeItem(key)
-  loadLocalStorage()
 }
 
 const clearIndexedDb = async () => {

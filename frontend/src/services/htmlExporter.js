@@ -190,15 +190,14 @@ async function buildMessageHtml(message) {
     }
   }
 
-  let mainContent = ''
-  if (message.sender === 'user') {
-    mainContent = `<div class="plain-user-text">${renderUserText(
-      message.content?.text ?? ''
-    )}</div>`
-  } else {
-    const segments = await parseModelResponse(message.content?.text ?? '')
-    mainContent = `<div class="prose">${renderModelSegments(segments)}</div>`
-  }
+  const mainContent =
+    message.sender === 'user'
+      ? `<div class="plain-user-text">${renderUserText(
+          message.content?.text ?? ''
+        )}</div>`
+      : `<div class="prose">${renderModelSegments(
+          await parseModelResponse(message.content?.text ?? '')
+        )}</div>`
 
   let systemBubbleHtml = ''
   let metadataHtml = ''

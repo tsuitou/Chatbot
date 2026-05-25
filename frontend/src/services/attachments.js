@@ -2,10 +2,15 @@ import { reactive } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { read as readXlsx, utils as xlsxUtils } from 'xlsx'
 import { showErrorToast } from './notification'
-import { getDefaultProviderId, getProviderById } from './providers'
 
 const MAX_FILE_SIZE_DEFAULT = 10 * 1024 * 1024 // 10MB
 const MAX_ATTACHMENTS = 10
+
+const DEFAULT_ATTACHMENT_POLICY = Object.freeze({
+  allowRemoteUpload: true,
+  allowedMimes: null,
+  maxInlineFileSize: null,
+})
 
 function cloneBlobValue(value, { mimeType } = {}) {
   if (!value) return null
@@ -38,6 +43,7 @@ const ALLOWED_MIMES = new Set([
   'application/pdf',
   'image/png',
   'image/jpeg',
+  'image/gif',
   'image/webp',
   'video/x-flv',
   'video/quicktime',
@@ -208,7 +214,9 @@ async function convertFile(file) {
     return new File([newBlob], `${file.name}.txt`, { type: 'text/plain' })
   } catch (error) {
     console.error('Failed to convert Excel file:', error)
-    throw new Error(`Could not process Excel file: ${file.name}`)
+    throw new Error(`Could not process Excel file: ${file.name}`, {
+      cause: error,
+    })
   }
 }
 
@@ -267,29 +275,36 @@ export function createAttachmentBucket(options = {}) {
     typeof options.maxFileSize === 'number' && options.maxFileSize > 0
       ? options.maxFileSize
       : null
-  const allowRemoteUpload = options.allowRemoteUpload !== false
 
-  function resolveProvider(providerId) {
-    if (options.resolveProvider) {
-      return options.resolveProvider(providerId)
+  function resolvePolicy() {
+    const raw =
+      typeof options.policy === 'function' ? options.policy() : options.policy
+    return {
+      ...DEFAULT_ATTACHMENT_POLICY,
+      allowRemoteUpload: options.allowRemoteUpload !== false,
+      ...(raw || {}),
     }
-    return getProviderById(providerId)
   }
 
-  function currentProviderId(fallback) {
-    if (typeof fallback === 'string' && fallback) {
-      return fallback
+  function isMimeAllowed(file, policy) {
+    if (!policy.allowedMimes) return true
+    const allowed = policy.allowedMimes
+    const mimeType = file.type || 'application/octet-stream'
+    if (allowed instanceof Set && allowed.has(mimeType)) return true
+    if (Array.isArray(allowed) && allowed.includes(mimeType)) return true
+    const patterns =
+      allowed instanceof Set || Array.isArray(allowed) ? allowed : []
+    for (const pattern of patterns) {
+      if (typeof pattern === 'string' && pattern.endsWith('/*')) {
+        const prefix = pattern.slice(0, -1)
+        if (mimeType.startsWith(prefix)) return true
+      }
     }
-    if (typeof options.defaultProviderId === 'function') {
-      const resolved = options.defaultProviderId()
-      if (resolved) return resolved
-    } else if (typeof options.defaultProviderId === 'string') {
-      return options.defaultProviderId
-    }
-    return getDefaultProviderId()
+    return false
   }
 
   async function addFiles(fileList, { providerId } = {}) {
+    void providerId
     const files = Array.from(fileList || [])
     if (!files.length) return
 
@@ -298,23 +313,46 @@ export function createAttachmentBucket(options = {}) {
       return
     }
 
-    const effectiveProviderId = currentProviderId(providerId)
-    const provider = resolveProvider(effectiveProviderId)
+    const policy = resolvePolicy()
+    const allowRemoteUpload = policy.allowRemoteUpload !== false
 
     for (const file of files) {
       try {
         const normalized = await normalizeFile(file)
+        if (!isMimeAllowed(normalized, policy)) {
+          throw new Error(
+            `File type not allowed for this model: ${normalized.type || normalized.name}`
+          )
+        }
         validateFile(normalized)
         const processed = await convertFile(normalized)
+        if (!isMimeAllowed(processed, policy)) {
+          throw new Error(
+            `File type not allowed for this model: ${processed.type || processed.name}`
+          )
+        }
         if (maxFileSize && processed.size > maxFileSize) {
           showErrorToast(
             `Attachments must be smaller than ${formatFileSize(maxFileSize)}.`
           )
           continue
         }
+        if (
+          policy.maxInlineFileSize &&
+          processed.size > policy.maxInlineFileSize &&
+          !allowRemoteUpload
+        ) {
+          showErrorToast(
+            `Attachments must be smaller than ${formatFileSize(
+              policy.maxInlineFileSize
+            )} for this model.`
+          )
+          continue
+        }
         const record = await buildAttachmentRecord(processed)
         if (!allowRemoteUpload && record.uploadProgress < 100) {
-          const limit = maxFileSize || MAX_FILE_SIZE_DEFAULT
+          const limit =
+            policy.maxInlineFileSize || maxFileSize || MAX_FILE_SIZE_DEFAULT
           showErrorToast(
             `Attachments larger than ${formatFileSize(
               limit
@@ -325,7 +363,7 @@ export function createAttachmentBucket(options = {}) {
         attachments.push(record)
         const reactiveAttachment = attachments[attachments.length - 1]
         if (reactiveAttachment.uploadProgress < 100 && allowRemoteUpload) {
-          void startUpload(reactiveAttachment, processed, provider)
+          void startUpload(reactiveAttachment, processed)
         }
       } catch (error) {
         const message = error?.message || 'Failed to add file.'
@@ -354,7 +392,8 @@ export function createAttachmentBucket(options = {}) {
         rejected = true
         continue
       }
-      if (!allowRemoteUpload && cloned.remoteUri) {
+      const policy = resolvePolicy()
+      if (!policy.allowRemoteUpload && cloned.remoteUri) {
         rejected = true
         continue
       }
@@ -372,14 +411,14 @@ export function createAttachmentBucket(options = {}) {
     }))
   }
 
-  async function startUpload(attachment, file, provider) {
-    if (!provider || typeof provider.uploadAttachment !== 'function') {
+  async function startUpload(attachment, file) {
+    if (typeof options.uploadFn !== 'function') {
       attachment.error = 'Attachment upload is not supported for this provider.'
       return
     }
 
     try {
-      const result = await provider.uploadAttachment(file, {
+      const result = await options.uploadFn(file, {
         onProgress(percentage) {
           attachment.uploadProgress = percentage
         },

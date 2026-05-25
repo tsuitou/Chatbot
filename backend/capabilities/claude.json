@@ -1,0 +1,160 @@
+{
+  "provider": "claude",
+  "defaults": {
+    "features": {
+      "systemInstruction": true
+    },
+    "parameters": {
+      "temperature": {
+        "type": "number",
+        "label": "Temperature",
+        "range": { "min": 0, "max": 1, "step": 0.05 }
+      },
+      "topP": {
+        "type": "number",
+        "label": "Top P",
+        "range": { "min": 0, "max": 1, "step": 0.01 }
+      },
+      "maxOutputTokens": {
+        "type": "integer",
+        "label": "Max Output Tokens",
+        "range": { "min": 1, "max": 16000 },
+        "default": 16000
+      }
+    }
+  },
+  "models": [
+    {
+      "modelQuery": "claude-opus-4-7",
+      "features": {
+        "adaptiveThinking": true,
+        "extendedThinking": false
+      },
+      "parameters": {
+        "temperature": null,
+        "topP": null,
+        "maxOutputTokens": { "range": { "min": 1, "max": 128000 }, "default": 128000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Mode",
+          "default": -1,
+          "specialValues": [
+            { "label": "Disabled", "value": 0 },
+            { "label": "Adaptive", "value": -1 }
+          ]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-sonnet-4-6",
+      "features": {
+        "adaptiveThinking": true,
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 32000,
+          "range": { "min": 1024, "max": 32000, "step": 256 },
+          "specialValues": [
+            { "label": "Disabled", "value": 0 },
+            { "label": "Adaptive", "value": -1 }
+          ]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-haiku-4-5",
+      "features": {
+        "adaptiveThinking": false,
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 32000,
+          "range": { "min": 1024, "max": 32000, "step": 256 },
+          "specialValues": [{ "label": "Disabled", "value": 0 }]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-opus-4-6",
+      "features": {
+        "adaptiveThinking": true,
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 128000 }, "default": 128000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 64000,
+          "range": { "min": 1024, "max": 64000, "step": 256 },
+          "specialValues": [
+            { "label": "Disabled", "value": 0 },
+            { "label": "Adaptive", "value": -1 }
+          ]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-sonnet-4",
+      "features": {
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 32000,
+          "range": { "min": 1024, "max": 32000, "step": 256 },
+          "specialValues": [{ "label": "Disabled", "value": 0 }]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-opus-4",
+      "features": {
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 32000 }, "default": 32000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 16000,
+          "range": { "min": 1024, "max": 16000, "step": 256 },
+          "specialValues": [{ "label": "Disabled", "value": 0 }]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-3-7-sonnet",
+      "features": {
+        "extendedThinking": true
+      },
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "thinkingBudget": {
+          "type": "integer",
+          "label": "Thinking Budget",
+          "default": 32000,
+          "range": { "min": 1024, "max": 32000, "step": 256 },
+          "specialValues": [{ "label": "Disabled", "value": 0 }]
+        }
+      }
+    },
+    {
+      "modelQuery": "claude-3-5-haiku",
+      "parameters": {
+        "maxOutputTokens": { "range": { "min": 1, "max": 8192 }, "default": 8192 }
+      }
+    }
+  ]
+}

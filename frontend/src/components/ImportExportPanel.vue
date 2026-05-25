@@ -2,8 +2,18 @@
   <div class="import-export-panel">
     <div class="section">
       <h3>Export</h3>
-      <p>Export all your chat history into a single Zip file.</p>
-      <button class="action-btn" @click="handleExport">Export All Data</button>
+      <p>Export chat history, model settings, or both into a Zip file.</p>
+      <div class="button-row">
+        <button class="action-btn" @click="handleExport('history')">
+          Export History
+        </button>
+        <button class="action-btn" @click="handleExport('settings')">
+          Export Settings
+        </button>
+        <button class="action-btn" @click="handleExport('all')">
+          Export All Data
+        </button>
+      </div>
     </div>
 
     <div class="section">
@@ -51,13 +61,20 @@ const importProgress = ref(0)
 const importStatusText = ref('')
 const chatStore = useChatStore()
 
-const handleExport = async () => {
+const exportLabels = {
+  all: 'all-data',
+  history: 'history',
+  settings: 'settings',
+}
+
+const handleExport = async (kind = 'all') => {
   try {
-    const blob = await dataManager.exportAllChats()
+    const blob = await dataManager.exportArchive({ kind })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `gemini-chat-export-${new Date().toISOString()}.zip`
+    const label = exportLabels[kind] || exportLabels.all
+    a.download = `gemini-chat-${label}-${new Date().toISOString()}.zip`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -91,9 +108,12 @@ const handleFileSelected = async (event) => {
         const {
           chats = 0,
           messages = 0,
+          autoMessages = 0,
           attachments = 0,
+          settings = 0,
         } = progress.totals || {}
-        totalItems = chats + messages + attachments * 2 // attachments are read and then written
+        totalItems =
+          chats + messages + autoMessages + attachments * 2 + settings
         return
       }
 
@@ -106,6 +126,7 @@ const handleFileSelected = async (event) => {
     await dataManager.importFromArchive(file, { onProgress })
 
     await chatStore.refreshChatList()
+    chatStore.setModelSettings(await dataManager.getModelSettings())
     await chatStore.prepareNewChat()
 
     importProgress.value = 100
@@ -135,6 +156,7 @@ const handleDeleteAll = async () => {
   ) {
     try {
       await dataManager.deleteAllData()
+      chatStore.setModelSettings({})
       await chatStore.refreshChatList()
       await chatStore.prepareNewChat()
       showSuccessToast('All data has been deleted.')
@@ -181,6 +203,11 @@ p {
 }
 .action-btn:hover {
   background-color: var(--primary-dark);
+}
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .danger-zone {
   margin-bottom: 24px;

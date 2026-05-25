@@ -67,8 +67,10 @@ function cloneRuntime(runtime) {
 
 function cloneConfigSnapshot(config) {
   if (!config) return null
+  const { systemInstruction, ...snapshot } = config
+  void systemInstruction
   return {
-    ...config,
+    ...snapshot,
     tools: config?.tools ? { ...config.tools } : undefined,
     parameters: config?.parameters ? { ...config.parameters } : undefined,
     options: config?.options ? { ...config.options } : undefined,

@@ -58,6 +58,9 @@ const TYPE_CHAT = 'chat'
 const TYPE_MESSAGE = 'message'
 const TYPE_ATTACHMENT = 'attachment'
 const TYPE_AUTO_MESSAGE = 'auto_message'
+const TYPE_SETTING = 'setting'
+
+const SETTING_MODEL_SETTINGS = 'modelSettings'
 
 const IDX_BY_TYPE = 'byType'
 const IDX_MESSAGE_BY_CHAT = 'messageByChat'
@@ -897,11 +900,12 @@ export async function getRecordCounts() {
   const store = tx.store
   const index = store.index(IDX_BY_TYPE)
 
-  const [all, chat, message, attachment] = await Promise.all([
+  const [all, chat, message, attachment, setting] = await Promise.all([
     store.count(),
     index.count(TYPE_CHAT),
     index.count(TYPE_MESSAGE),
     index.count(TYPE_ATTACHMENT),
+    index.count(TYPE_SETTING),
   ])
 
   await tx.done
@@ -910,6 +914,7 @@ export async function getRecordCounts() {
     chat,
     message,
     attachment,
+    setting,
   }
 }
 
@@ -925,7 +930,7 @@ export async function getRecordsPage({
   const skip = Math.max(0, Number(offset) || 0)
 
   const records = []
-  let total = 0
+  let total
 
   if (type === 'all') {
     total = await store.count()
@@ -963,6 +968,32 @@ export async function deleteRecordById(id) {
 export async function clearStore() {
   const db = await dbPromise
   await db.clear(STORE_NAME)
+}
+
+export async function getSetting(key, fallback = null) {
+  const db = await dbPromise
+  const record = await db.get(STORE_NAME, `setting:${key}`)
+  if (!record || record.type !== TYPE_SETTING) return fallback
+  return record.value ?? fallback
+}
+
+export async function putSetting(key, value) {
+  const db = await dbPromise
+  await db.put(STORE_NAME, {
+    id: `setting:${key}`,
+    type: TYPE_SETTING,
+    key,
+    value,
+    updatedAt: now(),
+  })
+}
+
+export async function getModelSettings() {
+  return getSetting(SETTING_MODEL_SETTINGS, {})
+}
+
+export async function putModelSettings(settings) {
+  await putSetting(SETTING_MODEL_SETTINGS, settings || {})
 }
 
 export async function getStorageUsage() {
@@ -1057,8 +1088,16 @@ function buildArchiveManifest(
   chats,
   messagesByChat,
   attachmentsByChat,
-  autoMessagesByChat
+  autoMessagesByChat,
+  settings = []
 ) {
+  const sanitizeAttachment = (attachment) => {
+    const { blob, file, ...rest } = attachment || {}
+    void blob
+    void file
+    return rest
+  }
+
   return {
     version: DB_VERSION,
     exportedAt: now(),
@@ -1071,7 +1110,16 @@ function buildArchiveManifest(
         }))
       ),
       autoMessages: autoMessagesByChat.flatMap(([, autos]) => autos || []),
-      attachments: attachmentsByChat.flatMap(([, atts]) => atts || []),
+      attachments: attachmentsByChat.flatMap(([, atts]) =>
+        (atts || []).map((att) => sanitizeAttachment(att))
+      ),
+      settings: settings.map((setting) => ({
+        id: setting.id,
+        type: TYPE_SETTING,
+        key: setting.key,
+        value: deepClone(setting.value ?? null),
+        updatedAt: setting.updatedAt ?? null,
+      })),
     },
   }
 }
@@ -1080,17 +1128,22 @@ export async function exportArchive(scope = { kind: 'all' }) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readonly')
   const store = tx.store
+  const kind = scope.kind || 'all'
+  const includeHistory = kind === 'all' || kind === 'history'
+  const includeSettings = kind === 'all' || kind === 'settings'
 
-  let chats = []
-  if (scope.kind === 'all') {
-    chats = await store.index(IDX_BY_TYPE).getAll(TYPE_CHAT)
-  } else {
-    const arr = []
+  const chats =
+    includeHistory && kind !== 'selected'
+      ? await store.index(IDX_BY_TYPE).getAll(TYPE_CHAT)
+      : []
+  const settings = includeSettings
+    ? await store.index(IDX_BY_TYPE).getAll(TYPE_SETTING)
+    : []
+  if (kind === 'selected') {
     for (const id of scope.chatIds || []) {
       const chat = await store.get(id)
-      if (chat && chat.type === TYPE_CHAT) arr.push(chat)
+      if (chat && chat.type === TYPE_CHAT) chats.push(chat)
     }
-    chats = arr
   }
 
   const msgGroups = []
@@ -1124,7 +1177,8 @@ export async function exportArchive(scope = { kind: 'all' }) {
     chats,
     msgGroups,
     attGroups,
-    autoMsgGroups
+    autoMsgGroups,
+    settings
   )
   const zip = new JSZip()
   zip.file('manifest.json', JSON.stringify(manifest, null, 2))
@@ -1159,6 +1213,7 @@ export async function importArchive(file, opts = {}) {
   const messages = manifest?.entities?.messages ?? []
   const autoMessages = manifest?.entities?.autoMessages ?? []
   const attachments = manifest?.entities?.attachments ?? []
+  const settings = manifest?.entities?.settings ?? []
 
   opts.onProgress?.({
     phase: 'analyzing',
@@ -1167,6 +1222,7 @@ export async function importArchive(file, opts = {}) {
       messages: messages.length,
       autoMessages: autoMessages.length,
       attachments: attachments.length,
+      settings: settings.length,
     },
   })
 
@@ -1252,7 +1308,7 @@ export async function importArchive(file, opts = {}) {
   for (let i = 0; i < attachments.length; i++) {
     const att = attachments[i]
     // eslint-disable-next-line no-unused-vars
-    const { blobPath, hasBlob, ...rest } = att
+    const { blobPath, hasBlob, file, ...rest } = att
     await store.put({
       ...rest,
       id: mapAttachment.get(att.id),
@@ -1265,6 +1321,23 @@ export async function importArchive(file, opts = {}) {
       phase: 'write:attachment',
       current: i + 1,
       total: attachments.length,
+    })
+  }
+
+  for (let i = 0; i < settings.length; i++) {
+    const setting = settings[i]
+    if (!setting?.key) continue
+    await store.put({
+      id: `setting:${setting.key}`,
+      type: TYPE_SETTING,
+      key: setting.key,
+      value: setting.value ?? null,
+      updatedAt: now(),
+    })
+    opts.onProgress?.({
+      phase: 'write:setting',
+      current: i + 1,
+      total: settings.length,
     })
   }
 

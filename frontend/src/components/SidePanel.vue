@@ -29,10 +29,20 @@
             </div>
           </div>
         </div>
-        <select v-model="selectedModel" class="model-select">
-          <option v-for="model in availableModels" :key="model" :value="model">
-            {{ model }}
-          </option>
+        <select
+          :value="selectedModel"
+          class="model-select"
+          @change="onModelChange"
+        >
+          <optgroup
+            v-for="group in availableModels"
+            :key="group.provider"
+            :label="group.label"
+          >
+            <option v-for="model in group.models" :key="model" :value="model">
+              {{ model }}
+            </option>
+          </optgroup>
         </select>
         <button class="new-chat-button" @click="prepareNewChat">
           <font-awesome-icon icon="plus" />
@@ -137,12 +147,7 @@ const historyChats = computed(() =>
 )
 const activeChatId = computed(() => store.activeChat?.id)
 
-const selectedModel = computed({
-  get: () => store.composerState.model,
-  set: (value) => {
-    store.setActiveModel(value)
-  },
-})
+const selectedModel = computed(() => store.composerState.model)
 
 const streamingEnabled = computed({
   get: () => store.composerState.streamingEnabled,
@@ -152,6 +157,11 @@ const streamingEnabled = computed({
 })
 
 // --- Methods ---
+const onModelChange = (event) => {
+  const model = event.target.value
+  store.setActiveModel(model)
+  store.setProviderId(store.findProviderForModel(model))
+}
 const prepareNewChat = () => store.prepareNewChat()
 const loadChat = (chatId) => store.loadChat(chatId)
 const deleteChat = (chatId) => {

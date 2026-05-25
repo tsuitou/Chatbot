@@ -1,8 +1,27 @@
 import { v4 as uuidv4 } from 'uuid'
 import { uploadFile as apiUploadFile } from '../api'
+import {
+  escapeHtml,
+  blobToBase64,
+  normalizeError as sharedNormalizeError,
+  parseUsage,
+  appendIfDefined,
+  base64ToBlob,
+  parametersFromConfig,
+  optionsFromConfig,
+} from './utils'
 
 export const id = 'gemini'
 export const label = 'Google Gemini'
+export const supportedTools = [
+  'useUrlContext',
+  'useGrounding',
+  'useCodeExecution',
+]
+export const attachmentPolicy = {
+  allowRemoteUpload: true,
+  allowedMimes: null,
+}
 
 function prepareToolConfig(tools = {}) {
   const result = []
@@ -24,26 +43,69 @@ function coerceOptions(config) {
   }
 }
 
-function appendIfDefined(target, key, value) {
-  if (value === undefined || value === null || value === '') return
-  target[key] = value
+async function buildMessageParts(message) {
+  const parts = []
+  const text = message?.content?.text ?? ''
+  if (text) {
+    parts.push({ text })
+  }
+
+  if (message?.attachments && message.attachments.length > 0) {
+    for (const att of message.attachments) {
+      if (att.remoteUri) {
+        parts.push({
+          fileData: { mimeType: att.mimeType, fileUri: att.remoteUri },
+        })
+      } else if (att.blob) {
+        const base64Data = await blobToBase64(att.blob)
+        parts.push({
+          inlineData: { mimeType: att.mimeType, data: base64Data },
+        })
+      } else {
+        throw new Error(
+          `Attachment "${att?.name || att?.id || '(unknown)'}" is missing both blob data and remote URI. This may indicate a data consistency issue or incomplete upload.`
+        )
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    parts.push({ text: '' })
+  }
+
+  const thoughtSignatures = Array.isArray(message?.metadata?.thoughtSignatures)
+    ? message.metadata.thoughtSignatures
+    : []
+  if (thoughtSignatures.length) {
+    const seen = new Set()
+    for (const entry of thoughtSignatures) {
+      const signature = entry?.signature ?? entry
+      if (!signature) continue
+      const targetIndex =
+        typeof entry?.partIndex === 'number' &&
+        entry.partIndex >= 0 &&
+        entry.partIndex < parts.length
+          ? entry.partIndex
+          : 0
+      const key = `${targetIndex}:${signature}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      const target = parts[targetIndex] || parts[0]
+      if (target) {
+        target.thoughtSignature = signature
+      }
+    }
+  }
+
+  return parts
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-export function createRequestPayload({
+export async function buildPayload({
   chatId,
   requestId,
   model,
   streaming,
-  contents,
+  messages = [],
   requestConfig,
 }) {
   const parameters = coerceParameters(requestConfig)
@@ -83,6 +145,15 @@ export function createRequestPayload({
     }
   }
 
+  const contents = []
+  for (const message of messages) {
+    if (!message?.sender) continue
+    const role = String(message.sender).toLowerCase()
+    if (!['user', 'model', 'system', 'tool'].includes(role)) continue
+    const parts = await buildMessageParts(message)
+    contents.push({ role, parts })
+  }
+
   return {
     provider: id,
     chatId,
@@ -92,16 +163,6 @@ export function createRequestPayload({
     config,
     streaming,
   }
-}
-
-function base64ToBlob(base64, mimeType) {
-  const byteCharacters = atob(base64)
-  const byteNumbers = new Array(byteCharacters.length)
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i)
-  }
-  const byteArray = new Uint8Array(byteNumbers)
-  return new Blob([byteArray], { type: mimeType })
 }
 
 export function parseStreamChunk(rawChunk) {
@@ -173,16 +234,8 @@ export function parseStreamChunk(rawChunk) {
     result.finishReason = rawChunk.finishReason
   }
 
-  if (rawChunk.usage) {
-    const usage = rawChunk.usage
-    metadata.usage = {
-      prompt: usage.promptTokenCount ?? null,
-      reasoning: usage.thoughtsTokenCount ?? null,
-      output: usage.candidatesTokenCount ?? null,
-      total: usage.totalTokenCount ?? null,
-      raw: usage,
-    }
-  }
+  const usage = parseUsage(rawChunk.usage)
+  if (usage) metadata.usage = usage
 
   const grounding = rawChunk.grounding || rawChunk.metadata?.grounding
   if (grounding) {
@@ -217,20 +270,6 @@ export function parseStreamChunk(rawChunk) {
   }
 
   return result
-}
-
-function parametersFromConfig(config) {
-  if (!config) return {}
-  return config.parameters && typeof config.parameters === 'object'
-    ? config.parameters
-    : {}
-}
-
-function optionsFromConfig(config) {
-  if (!config) return {}
-  return config.options && typeof config.options === 'object'
-    ? config.options
-    : {}
 }
 
 export function buildDisplayIndicators(message) {
@@ -360,7 +399,6 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
   }
 
   const queries = grounding.webSearchQueries || grounding.web_search_queries
-  const groundingSegments = []
 
   if (sources.length) {
     const sourceLinks = sources
@@ -392,23 +430,7 @@ export function buildMetadataHtmlForExport(message) {
 }
 
 export function normalizeError(rawError, phase) {
-  const status = rawError?.status || 500
-  let code = 'E_UNKNOWN'
-  if (status === 400) code = 'E_BAD_REQUEST'
-  if (status === 401) code = 'E_UNAUTHORIZED'
-  if (status === 403) code = 'E_FORBIDDEN'
-  if (status === 429) code = 'E_RATE_LIMIT'
-  if (status >= 500) code = 'E_BACKEND'
-
-  return {
-    code,
-    message:
-      rawError?.message || rawError?.error || 'An unknown error occurred.',
-    status,
-    phase,
-    retryable: status >= 500,
-    provider: id,
-  }
+  return sharedNormalizeError(rawError, phase, id)
 }
 
 export async function uploadAttachment(file, { onProgress } = {}) {

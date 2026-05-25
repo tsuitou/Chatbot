@@ -347,7 +347,6 @@ onUnmounted(() => {
 })
 
 const releaseStaleAttachmentUrls = (attachments) => {
-
   const nextIds = new Set()
   for (const att of attachments || []) {
     if (att?.id && att.blob) {

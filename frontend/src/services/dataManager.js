@@ -1,7 +1,11 @@
 import * as db from './db'
 
-export async function exportAllChats(scope = { kind: 'all' }) {
+export async function exportArchive(scope = { kind: 'all' }) {
   return db.exportArchive(scope)
+}
+
+export async function exportAllChats(scope = { kind: 'all' }) {
+  return exportArchive(scope)
 }
 
 export async function importFromArchive(
@@ -11,7 +15,10 @@ export async function importFromArchive(
   return db.importArchive(file, { idMode: idRewrite, onProgress })
 }
 
+export async function getModelSettings() {
+  return db.getModelSettings()
+}
+
 export async function deleteAllData() {
   await db.clearStore()
-  localStorage.clear()
 }
