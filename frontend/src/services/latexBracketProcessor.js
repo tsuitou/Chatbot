@@ -15,13 +15,19 @@ export function normalizeLatexBrackets(text) {
 
   const blockPlaceholders = []
 
-  workingText = convertDelimited(workingText, '\\[', '\\]', (body) => {
-    const trimmed = body.trim()
-    if (!trimmed) return null
-    const token = `${BLOCK_TOKEN_PREFIX}${blockPlaceholders.length}@@`
-    blockPlaceholders.push({ token, value: trimmed })
-    return `\n\n${token}\n\n`
-  })
+  workingText = convertDelimited(
+    workingText,
+    '\\[',
+    '\\]',
+    (body, context) => {
+      const trimmed = body.trim()
+      if (!trimmed) return null
+      const token = `${BLOCK_TOKEN_PREFIX}${blockPlaceholders.length}@@`
+      blockPlaceholders.push({ token, value: trimmed })
+      return `\n\n${context.lineIndent || ''}${token}\n\n`
+    },
+    { stripLineIndent: true }
+  )
 
   const inlinePlaceholders = []
 
@@ -70,7 +76,7 @@ function restoreSegments(text, bucket) {
   )
 }
 
-function convertDelimited(source, open, close, replacer) {
+function convertDelimited(source, open, close, replacer, options = {}) {
   let rest = source
   let result = ''
 
@@ -93,8 +99,13 @@ function convertDelimited(source, open, close, replacer) {
       break
     }
 
-    result += rest.slice(0, idx)
-    const replacement = replacer(match.body)
+    const prefix = rest.slice(0, idx)
+    const lineIndent = options.stripLineIndent
+      ? getStandaloneLineIndent(prefix)
+      : null
+    result +=
+      lineIndent === null ? prefix : prefix.slice(0, -lineIndent.length)
+    const replacement = replacer(match.body, { lineIndent })
     if (typeof replacement === 'string') {
       result += replacement
     } else {
@@ -104,6 +115,13 @@ function convertDelimited(source, open, close, replacer) {
   }
 
   return result
+}
+
+function getStandaloneLineIndent(prefix) {
+  const lineStart =
+    Math.max(prefix.lastIndexOf('\n'), prefix.lastIndexOf('\r')) + 1
+  const linePrefix = prefix.slice(lineStart)
+  return /^[ \t]*$/.test(linePrefix) ? linePrefix : null
 }
 
 function findDelimited(source, start, open, close) {

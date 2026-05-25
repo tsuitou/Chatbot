@@ -104,23 +104,7 @@ function injectPlaceholderMath(tree, blockPlaceholders, inlinePlaceholders) {
     const blockMap = new Map(
       blockPlaceholders.map(({ token, value }) => [token, value])
     )
-    const nextChildren = []
-    for (const child of tree.children) {
-      if (
-        child?.type === 'paragraph' &&
-        Array.isArray(child.children) &&
-        child.children.length === 1 &&
-        child.children[0]?.type === 'text'
-      ) {
-        const tokenCandidate = child.children[0].value.trim()
-        if (blockMap.has(tokenCandidate)) {
-          nextChildren.push(createDisplayMathNode(blockMap.get(tokenCandidate)))
-          continue
-        }
-      }
-      nextChildren.push(child)
-    }
-    tree.children = nextChildren
+    replaceBlockPlaceholderParagraphs(tree, blockMap)
   }
 
   if (!inlinePlaceholders.length) return
@@ -154,6 +138,27 @@ function injectPlaceholderMath(tree, blockPlaceholders, inlinePlaceholders) {
 
     parent.children.splice(index, 1, ...nextNodes)
     return index + nextNodes.length
+  })
+}
+
+function replaceBlockPlaceholderParagraphs(parent, blockMap) {
+  if (!parent || !Array.isArray(parent.children)) return
+
+  parent.children = parent.children.map((child) => {
+    if (
+      child?.type === 'paragraph' &&
+      Array.isArray(child.children) &&
+      child.children.length === 1 &&
+      child.children[0]?.type === 'text'
+    ) {
+      const tokenCandidate = child.children[0].value.trim()
+      if (blockMap.has(tokenCandidate)) {
+        return createDisplayMathNode(blockMap.get(tokenCandidate))
+      }
+    }
+
+    replaceBlockPlaceholderParagraphs(child, blockMap)
+    return child
   })
 }
 
