@@ -34,10 +34,12 @@ async function main() {
     // 3. バックエンドファイルのコピー
     const backendFiles = [
       'server.js',
+      'utils.js',
       'package.json',
       'package-lock.json',
       '.env',
       'system_instruction.txt',
+      'agent-tools.json',
       'launch.bat',
       'launch.sh',
     ]

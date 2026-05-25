@@ -112,15 +112,21 @@ function hasProviderKey(keys) {
 
 function resolveProviderKeys() {
   const keys = {
-    gemini: (process.env.GEMINI_API_KEY || '').trim(),
-    claude: (process.env.CLAUDE_API_KEY || process.env.ANTHROPIC_API_KEY || '').trim(),
+    gemini: '',
+    claude: '',
   }
 
-  // First check for key_valid files
+  // First check for key_valid files in cwd and runtimeDirname (do not go up directories)
   const validCandidatePaths = Array.from(new Set([
-    resolveFirstExisting('key_valid', 'file'),
-    resolveFirstExisting(path.join('backend', 'key_valid'), 'file'),
-  ].filter(Boolean)))
+    path.join(process.cwd(), 'key_valid'),
+    path.join(runtimeDirname, 'key_valid'),
+  ])).filter(p => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).isFile()
+    } catch {
+      return false
+    }
+  })
 
   for (const keyPath of validCandidatePaths) {
     try {
@@ -132,11 +138,17 @@ function resolveProviderKeys() {
     }
   }
 
-  // Then check for regular key files and rename them if they contain valid keys
+  // Then check for regular key files in cwd and runtimeDirname and rename them if they contain valid keys
   const candidatePaths = Array.from(new Set([
-    resolveFirstExisting('key', 'file'),
-    resolveFirstExisting(path.join('backend', 'key'), 'file'),
-  ].filter(Boolean)))
+    path.join(process.cwd(), 'key'),
+    path.join(runtimeDirname, 'key'),
+  ])).filter(p => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).isFile()
+    } catch {
+      return false
+    }
+  })
 
   for (const keyPath of candidatePaths) {
     try {
@@ -164,7 +176,15 @@ function resolveProviderKeys() {
 
 const providerKeys = resolveProviderKeys()
 if (!providerKeys.gemini && !providerKeys.claude) {
-  throw new Error('No provider API key found. Set GEMINI_API_KEY or CLAUDE_API_KEY.')
+  console.error('\n======================================================================')
+  console.error('❌ Error: No provider API key found!')
+  console.error('Please configure at least one API key using the following method:')
+  console.error('Place a "key" file containing your API key(s) in the execution directory.')
+  console.error('Format (JSON or text):')
+  console.error('  JSON:  {"gemini": "YOUR_GEMINI_KEY", "claude": "YOUR_CLAUDE_KEY"}')
+  console.error('  Plain: YOUR_GEMINI_KEY')
+  console.error('======================================================================\n')
+  process.exit(1)
 }
 
 const modelFilterKeywords = (process.env.MODEL_FILTER || '')
