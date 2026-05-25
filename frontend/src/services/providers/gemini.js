@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import { uploadFile as apiUploadFile } from '../api'
+import { safeAnchorHtml } from '../htmlSafety'
 import {
   escapeHtml,
   blobToBase64,
@@ -332,16 +333,17 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
 
   const parameterParts = []
   if (params.temperature !== undefined)
-    parameterParts.push(`Temp: ${params.temperature}`)
-  if (params.topP !== undefined) parameterParts.push(`Top-P: ${params.topP}`)
+    parameterParts.push(`Temp: ${escapeHtml(params.temperature)}`)
+  if (params.topP !== undefined)
+    parameterParts.push(`Top-P: ${escapeHtml(params.topP)}`)
   if (params.maxOutputTokens !== undefined)
-    parameterParts.push(`MaxTokens: ${params.maxOutputTokens}`)
+    parameterParts.push(`MaxTokens: ${escapeHtml(params.maxOutputTokens)}`)
   if (params.thinkingBudget !== undefined)
-    parameterParts.push(`Thinking: ${params.thinkingBudget}`)
+    parameterParts.push(`Thinking: ${escapeHtml(params.thinkingBudget)}`)
   if (params.thinkingLevel !== undefined)
-    parameterParts.push(`Thinking Level: ${params.thinkingLevel}`)
+    parameterParts.push(`Thinking Level: ${escapeHtml(params.thinkingLevel)}`)
 
-  const modelLabel = config.model ? config.model : ''
+  const modelLabel = config.model ? escapeHtml(config.model) : ''
   let firstLine = ''
   if (modelLabel) {
     firstLine = modelLabel
@@ -365,17 +367,17 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
     ? metadata.thoughtSignatures.length
     : 0
   const usageParts = []
-  if (prompt != null) usageParts.push(`Prompt: ${prompt}`)
-  if (output != null) usageParts.push(`Output: ${output}`)
-  if (reasoning != null) usageParts.push(`Reasoning: ${reasoning}`)
-  if (total != null) usageParts.push(`Total: ${total}`)
+  if (prompt != null) usageParts.push(`Prompt: ${escapeHtml(prompt)}`)
+  if (output != null) usageParts.push(`Output: ${escapeHtml(output)}`)
+  if (reasoning != null) usageParts.push(`Reasoning: ${escapeHtml(reasoning)}`)
+  if (total != null) usageParts.push(`Total: ${escapeHtml(total)}`)
 
   const detailSegments = []
   if (usageParts.length) {
     detailSegments.push(`Tokens [ ${usageParts.join(', ')} ]`)
   }
   if (finishReason) {
-    detailSegments.push(`Finish [ ${finishReason} ]`)
+    detailSegments.push(`Finish [ ${escapeHtml(finishReason)} ]`)
   }
   if (signatureCount > 0) {
     detailSegments.push(`Thought Signatures [ ${signatureCount} ]`)
@@ -403,9 +405,11 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
   if (sources.length) {
     const sourceLinks = sources
       .map((src) => {
-        const safeUri = escapeHtml(src.uri)
-        const safeTitle = escapeHtml(src.title || src.uri)
-        return `<a href="${safeUri}" target="_blank">${safeTitle}</a>`
+        return safeAnchorHtml(
+          src.uri,
+          src.title || src.uri,
+          'target="_blank" rel="noopener noreferrer"'
+        )
       })
       .join(', ')
     lines.push(`Grounding Sources: ${sourceLinks}`)

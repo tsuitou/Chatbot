@@ -1,9 +1,7 @@
 /* eslint-disable no-useless-escape */
 const containsLatexRegex =
-  /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\}.*?\\end\{equation\}/s
+  /\\\(.*?\\\)|\\\[.*?\\\]|\$.*?\$|\\begin\{equation\*?\}.*?\\end\{equation\*?\}/s
 const PROTECTED_PREFIX = '__LATEX_PROTECTED__'
-const BLOCK_TOKEN_PREFIX = '@@KATEX_BLOCK_'
-const INLINE_TOKEN_PREFIX = '@@KATEX_INLINE_'
 
 export function normalizeLatexBrackets(text) {
   if (typeof text !== 'string' || !containsLatexRegex.test(text)) {
@@ -14,18 +12,36 @@ export function normalizeLatexBrackets(text) {
   let workingText = protectSegments(text, protectedItems)
 
   const blockPlaceholders = []
+  const tokenPrefix = createTokenPrefix()
+  const createBlockPlaceholder = (body, context) => {
+    const trimmed = body.trim()
+    if (!trimmed) return null
+    const token = `${tokenPrefix}BLOCK_${blockPlaceholders.length}@@`
+    blockPlaceholders.push({ token, value: trimmed })
+    return `\n\n${context.lineIndent || ''}${token}\n\n`
+  }
 
   workingText = convertDelimited(
     workingText,
     '\\[',
     '\\]',
-    (body, context) => {
-      const trimmed = body.trim()
-      if (!trimmed) return null
-      const token = `${BLOCK_TOKEN_PREFIX}${blockPlaceholders.length}@@`
-      blockPlaceholders.push({ token, value: trimmed })
-      return `\n\n${context.lineIndent || ''}${token}\n\n`
-    },
+    createBlockPlaceholder,
+    { stripLineIndent: true }
+  )
+
+  workingText = convertDelimited(
+    workingText,
+    '\\begin{equation}',
+    '\\end{equation}',
+    createBlockPlaceholder,
+    { stripLineIndent: true }
+  )
+
+  workingText = convertDelimited(
+    workingText,
+    '\\begin{equation*}',
+    '\\end{equation*}',
+    createBlockPlaceholder,
     { stripLineIndent: true }
   )
 
@@ -34,7 +50,7 @@ export function normalizeLatexBrackets(text) {
   workingText = convertDelimited(workingText, '\\(', '\\)', (body) => {
     const trimmed = body.trim()
     if (!trimmed) return null
-    const token = `${INLINE_TOKEN_PREFIX}${inlinePlaceholders.length}@@`
+    const token = `${tokenPrefix}INLINE_${inlinePlaceholders.length}@@`
     inlinePlaceholders.push({ token, value: trimmed })
     return token
   })
@@ -45,6 +61,10 @@ export function normalizeLatexBrackets(text) {
     block: blockPlaceholders,
     inline: inlinePlaceholders,
   }
+}
+
+function createTokenPrefix() {
+  return `@@KATEX_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_`
 }
 
 function protectSegments(text, bucket) {
@@ -104,7 +124,9 @@ function convertDelimited(source, open, close, replacer, options = {}) {
       ? getStandaloneLineIndent(prefix)
       : null
     result +=
-      lineIndent === null ? prefix : prefix.slice(0, -lineIndent.length)
+      lineIndent === null
+        ? prefix
+        : prefix.slice(0, prefix.length - lineIndent.length)
     const replacement = replacer(match.body, { lineIndent })
     if (typeof replacement === 'string') {
       result += replacement

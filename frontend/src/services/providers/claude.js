@@ -259,7 +259,9 @@ function buildMetadataLines(message, { includeModelDetails = true } = {}) {
 }
 
 export function buildMetadataHtml(message) {
-  return buildMetadataLines(message, { includeModelDetails: false }).join('\n')
+  return buildMetadataLines(message, { includeModelDetails: false })
+    .map((line) => escapeHtml(line))
+    .join('\n')
 }
 
 export function buildMetadataHtmlForExport(message) {

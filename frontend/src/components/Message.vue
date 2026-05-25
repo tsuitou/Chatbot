@@ -433,12 +433,7 @@ const isExpired = (attachment) => {
   return new Date(attachment.expirationTime) < new Date()
 }
 
-onUnmounted(() => {
-  for (const [, url] of blobUrlCache.entries()) {
-    URL.revokeObjectURL(url)
-  }
-  blobUrlCache.clear()
-})
+
 </script>
 
 <style scoped>

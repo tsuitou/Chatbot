@@ -7,6 +7,7 @@ import rehypeStringify from 'rehype-stringify'
 import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import { normalizeLatexBrackets } from './latexBracketProcessor.js'
+import { isSafeUrl } from './htmlSafety.js'
 import hljs from 'highlight.js'
 
 const segmentProcessor = unified()
@@ -30,6 +31,7 @@ export async function parseModelResponse(rawText) {
     .use(remarkGfm)
     .use(remarkMath, { singleDollarTextMath: false })
     .parse(normalizedText)
+  sanitizeMarkdownUrls(tree)
   injectPlaceholderMath(tree, blockPlaceholders, inline)
   let nonCodeNodesBuffer = []
 
@@ -37,7 +39,7 @@ export async function parseModelResponse(rawText) {
     if (nonCodeNodesBuffer.length > 0) {
       const segmentTree = { type: 'root', children: nonCodeNodesBuffer }
       const file = await segmentProcessor.run(segmentTree)
-      const html = unified().use(rehypeStringify).stringify(file)
+      const html = segmentProcessor.stringify(file)
 
       segments.push({
         type: 'plaintext',
@@ -50,7 +52,7 @@ export async function parseModelResponse(rawText) {
   for (const node of tree.children) {
     if (node.type === 'code') {
       await processNonCodeNodes()
-      const id = String(node.lang)
+      const id = String(node.lang ?? '')
         .trim()
         .replace(/^\{?\.?(language-|lang-)/, '')
         .replace(/^source-/, '')
@@ -76,6 +78,39 @@ export async function parseModelResponse(rawText) {
 
   await processNonCodeNodes()
   return segments
+}
+
+function sanitizeMarkdownUrls(tree) {
+  visit(tree, (node, index, parent) => {
+    if (!node || typeof node !== 'object') return
+    if (!['link', 'image', 'definition'].includes(node.type)) return
+    if (isSafeUrl(node.url)) return
+
+    if (node.type === 'definition') {
+      node.url = ''
+      return
+    }
+
+    if (
+      !parent ||
+      typeof index !== 'number' ||
+      !Array.isArray(parent.children)
+    ) {
+      node.url = ''
+      return
+    }
+
+    if (node.type === 'link') {
+      parent.children.splice(index, 1, ...(node.children || []))
+      return index
+    }
+
+    parent.children.splice(index, 1, {
+      type: 'text',
+      value: node.alt || '',
+    })
+    return index
+  })
 }
 
 function splitTrailingFence(src) {

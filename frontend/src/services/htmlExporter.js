@@ -1,5 +1,6 @@
 import { parseModelResponse } from './parser'
 import { getProviderById } from './providers'
+import { escapeHtml } from './htmlSafety'
 
 const ICONS = {
   file: `
@@ -32,15 +33,6 @@ const dateTimeFormatter = new Intl.DateTimeFormat('ja-JP', {
   hour: '2-digit',
   minute: '2-digit',
 })
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
 
 function formatTimestamp(value) {
   if (!value) return ''
@@ -163,7 +155,7 @@ function buildSystemMeta(message, provider) {
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => `<div class="metadata-item">${line}</div>`)
+      .map((line) => `<div class="metadata-item">${escapeHtml(line)}</div>`)
       .join('')
   }
   return ''
