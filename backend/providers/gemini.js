@@ -25,20 +25,23 @@ export class GeminiProvider {
 
   _normalizeConfig(modelName, userConfig) {
     const finalConfig = { ...userConfig };
-    
-    if (!finalConfig.systemInstruction) {
-        finalConfig.systemInstruction = this.defaultSystemInstruction;
-    }
-
-    if (supportsServerSideToolInvocations(modelName)) {
-        finalConfig.toolConfig = {
-            ...(finalConfig.toolConfig || {}),
-            includeServerSideToolInvocations: true,
-        };
-    }
 
     const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
     const ranges = buildConfigRanges(parameters, features)
+
+    if (features?.systemInstruction !== false && !finalConfig.systemInstruction) {
+      finalConfig.systemInstruction = this.defaultSystemInstruction;
+    }
+
+    if (features?.tools === false) {
+      delete finalConfig.tools
+      delete finalConfig.toolConfig
+    } else if (supportsServerSideToolInvocations(modelName)) {
+      finalConfig.toolConfig = {
+        ...(finalConfig.toolConfig || {}),
+        includeServerSideToolInvocations: true,
+      }
+    }
 
     if (finalConfig.temperature === undefined || finalConfig.temperature === null) {
       if (ranges.temperature && ranges.temperature.default !== undefined) {
@@ -72,19 +75,27 @@ export class GeminiProvider {
         finalConfig.thinkingConfig.thinkingBudget = ranges.thinkingBudget.default
       }
     }
-    
+
+    const imageConfigParams = Array.isArray(features?.imageConfigParams)
+      ? features.imageConfigParams
+      : []
+    for (const key of imageConfigParams) {
+      if (finalConfig[key] === undefined) continue
+      finalConfig.imageConfig = finalConfig.imageConfig || {}
+      finalConfig.imageConfig[key] = finalConfig[key]
+      delete finalConfig[key]
+    }
+
     return finalConfig;
   }
 
   async *generateStream(modelName, contents, config, chatId, requestId) {
     const normalizedConfig = this._normalizeConfig(modelName, config);
-    
-    const isImageModel = modelName.includes('image');
-    
+
     const request = {
       model: modelName,
       contents,
-      ...(isImageModel ? {} : { config: normalizedConfig }),
+      config: normalizedConfig,
     }
     
     const stream = await this.genAI.models.generateContentStream(request);
@@ -103,13 +114,11 @@ export class GeminiProvider {
   
   async generate(modelName, contents, config, chatId, requestId) {
      const normalizedConfig = this._normalizeConfig(modelName, config);
-     
-     const isImageModel = modelName.includes('image');
-     
+
      const request = {
         model: modelName,
         contents,
-        ...(isImageModel ? {} : { config: normalizedConfig }),
+        config: normalizedConfig,
      }
      
      const result = await this.genAI.models.generateContent(request);

@@ -57,7 +57,7 @@
 
                 <!-- Numeric Input -->
                 <input
-                  v-if="param.type === 'number'"
+                  v-if="param.type === 'number' || param.type === 'integer'"
                   :id="param.key"
                   v-model.number.lazy="currentSettings.parameters[param.key]"
                   type="number"
@@ -71,6 +71,16 @@
                   :min="param.min"
                   :max="param.max"
                   :disabled="param.disabled"
+                />
+
+                <!-- String Input -->
+                <input
+                  v-else-if="param.type === 'string'"
+                  :id="param.key"
+                  v-model="currentSettings.parameters[param.key]"
+                  type="text"
+                  class="text-input"
+                  :placeholder="param.label"
                 />
 
                 <!-- Enum Select -->
@@ -219,118 +229,45 @@ const fetchConfigRangesForModel = async (modelName) => {
 
 // --- Dynamic Parameters Logic ---
 
+const SKIP_RANGE_KEYS = new Set(['features'])
+
 const dynamicParameters = computed(() => {
   const ranges = configRanges.value || {}
-  const params = []
+  return Object.entries(ranges)
+    .filter(([key, def]) => !SKIP_RANGE_KEYS.has(key) && def && typeof def === 'object')
+    .map(([key, def]) => {
+      const base = { key, label: def.label || key, default: def.default }
 
-  if (ranges.temperature) {
-    params.push({
-      key: 'temperature',
-      label: 'Temperature',
-      type: 'number',
-      min: ranges.temperature.min,
-      max: ranges.temperature.max,
-      step: ranges.temperature.step || 0.1,
-      hint: `${ranges.temperature.min} - ${ranges.temperature.max}`,
-      default: ranges.temperature.default,
-    })
-  }
-
-  if (ranges.topP) {
-    params.push({
-      key: 'topP',
-      label: 'Top P',
-      type: 'number',
-      min: ranges.topP.min,
-      max: ranges.topP.max,
-      step: ranges.topP.step || 0.01,
-      hint: `${ranges.topP.min} - ${ranges.topP.max}`,
-      default: ranges.topP.default,
-    })
-  }
-
-  if (ranges.topK) {
-    params.push({
-      key: 'topK',
-      label: 'Top K',
-      type: 'number',
-      min: ranges.topK.min,
-      max: ranges.topK.max,
-      step: ranges.topK.step || 1,
-      hint: `${ranges.topK.min} - ${ranges.topK.max}`,
-      default: ranges.topK.default,
-    })
-  }
-
-  if (ranges.maxOutputTokens) {
-    params.push({
-      key: 'maxOutputTokens',
-      label: 'Max Output Tokens',
-      type: 'number',
-      min: 1,
-      max: ranges.maxOutputTokens.max,
-      hint: `1 - ${ranges.maxOutputTokens.max}`,
-      default: ranges.maxOutputTokens.default,
-    })
-  }
-
-  if (ranges.thinkingBudget) {
-    const r = ranges.thinkingBudget
-    const hasRange = r.min !== undefined && r.max !== undefined
-    const hasSpecialValues =
-      Array.isArray(r.specialValues) && r.specialValues.length > 0
-
-    if (!hasRange && hasSpecialValues) {
-      params.push({
-        key: 'thinkingBudget',
-        label: r.label || 'Thinking Mode',
-        type: 'enum',
-        options: r.specialValues,
-        default: r.default,
-      })
-    } else {
-      let rangeStr = '(N/A)'
-      if (r.ranges && Array.isArray(r.ranges)) {
-        rangeStr = r.ranges
-          .map((x) => (typeof x === 'object' ? `${x.min}-${x.max}` : x))
-          .join(', ')
-      } else if (hasRange) {
-        const parts = []
-        if (hasSpecialValues) {
-          parts.push(...r.specialValues.map((v) => `${v.label} (${v.value})`))
-        }
-        parts.push(`${r.min} - ${r.max}`)
-        rangeStr = parts.join(', ')
+      if (def.type === 'enum') {
+        return { ...base, type: 'enum', options: def.options || [] }
       }
 
-      params.push({
-        key: 'thinkingBudget',
-        label: r.label || 'Thinking Budget',
-        type: 'number',
-        min: r.min,
-        max: r.max,
-        step: r.step || 256,
-        hint: rangeStr,
-        disabled: rangeStr === '(N/A)',
-        default: r.default,
-      })
-    }
-  }
+      if (def.type === 'string') {
+        return { ...base, type: 'string' }
+      }
 
-  // Check specific keys known to be Enums
-  ;['thinkingLevel'].forEach((key) => {
-    if (ranges[key] && ranges[key].options) {
-      params.push({
-        key: key,
-        label: 'Thinking Level',
-        type: 'enum',
-        options: ranges[key].options,
-        default: ranges[key].default,
-      })
-    }
-  })
+      // number / integer
+      const hasRange = def.min !== undefined && def.max !== undefined
+      const specialValues = Array.isArray(def.specialValues) ? def.specialValues : []
 
-  return params
+      if (!hasRange && specialValues.length > 0) {
+        return { ...base, type: 'enum', options: specialValues }
+      }
+
+      const hintParts = [
+        ...specialValues.map((v) => `${v.label} (${v.value})`),
+        ...(hasRange ? [`${def.min} - ${def.max}`] : []),
+      ]
+      return {
+        ...base,
+        type: def.type || 'number',
+        min: def.min,
+        max: def.max,
+        step: def.step ?? (def.type === 'integer' ? 1 : 0.1),
+        hint: hintParts.join(', '),
+        disabled: !hasRange && specialValues.length === 0,
+      }
+    })
 })
 
 const supportsIncludeThoughts = computed(() => {
