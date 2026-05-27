@@ -3,6 +3,7 @@ import { toRaw } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import * as db from '../services/db'
 import * as apiAdapter from '../services/apiAdapter'
+import { getModelCapabilities } from '../services/api'
 import { startGeneration } from '../services/socket'
 import { showErrorToast } from '../services/notification'
 import { exportChatAsHTML } from '../services/htmlExporter'
@@ -32,6 +33,13 @@ import {
 const DEFAULT_TITLE = 'New Chat'
 const TITLE_MAX_LEN = 30
 const MAX_INLINE_ATTACHMENT_SIZE = 10 * 1024 * 1024
+const EMPTY_CAPABILITIES = Object.freeze({
+  features: {},
+  parameters: {},
+  options: {},
+  tools: {},
+  attachments: { enabled: false },
+})
 
 const GenerationStatus = Object.freeze({
   IDLE: 'idle',
@@ -49,9 +57,9 @@ function recordDebugRequest(payload) {
   }
 }
 
-function readModelSettingsFromState(all, model, fallbackProviderId) {
+function readModelSettingsFromState(all, model) {
   const raw = model && all[model] ? all[model] : null
-  return normalizeSettingsEntry(raw, { fallbackProviderId })
+  return normalizeSettingsEntry(raw)
 }
 
 function sortMessagesBySequence(messages) {
@@ -101,6 +109,20 @@ function flattenModelGroups(groups) {
   )
 }
 
+function capabilityKey(providerId, model) {
+  return `${providerId || getDefaultProviderId()}:${model || ''}`
+}
+
+function enabledTools(selectedTools = {}, toolDefinitions = {}) {
+  const result = {}
+  for (const [key, definition] of Object.entries(toolDefinitions || {})) {
+    if (definition?.enabled && selectedTools[key]) {
+      result[key] = true
+    }
+  }
+  return result
+}
+
 export const useChatStore = defineStore('chat', {
   state: () => ({
     appState: {
@@ -108,6 +130,7 @@ export const useChatStore = defineStore('chat', {
       availableModels: [],
       defaultModel: null,
       modelSettingsByModel: {},
+      modelCapabilitiesByKey: {},
     },
     chatState: {
       list: [],
@@ -160,27 +183,35 @@ export const useChatStore = defineStore('chat', {
     isGenerating(state) {
       return state.generationState.status === GenerationStatus.STREAMING
     },
+    currentModelCapabilities(state) {
+      const model = state.composerState.model
+      if (!model) return EMPTY_CAPABILITIES
+      const providerId = this.findProviderForModel(model)
+      return (
+        state.appState.modelCapabilitiesByKey[
+          capabilityKey(providerId, model)
+        ] || EMPTY_CAPABILITIES
+      )
+    },
+    currentToolDefinitions() {
+      return this.currentModelCapabilities.tools || {}
+    },
     currentRequestConfig(state) {
       const model = state.composerState.model
       const streaming = state.composerState.streamingEnabled
-      const fallbackProviderId =
-        state.composerState.providerId || getDefaultProviderId()
       const normalized = readModelSettingsFromState(
         state.appState.modelSettingsByModel,
-        model,
-        fallbackProviderId
+        model
       )
       const settings = cloneModelSettings(normalized)
       const providerId = model
         ? this.findProviderForModel(model)
-        : settings.providerId || fallbackProviderId
+        : settings.providerId || state.composerState.providerId
       const chatConfigStore = useChatConfigStore()
       const activeChatId = state.chatState.active?.meta?.id || null
       const systemInstruction = chatConfigStore.getSystemPrompt(activeChatId)
-      const provider = getProviderById(providerId)
-      const supportsTools =
-        provider?.supportedTools && provider.supportedTools.length > 0
-      const tools = supportsTools ? { ...state.composerState.tools } : {}
+      const toolDefinitions = this.currentToolDefinitions
+      const tools = enabledTools(state.composerState.tools, toolDefinitions)
       return {
         providerId,
         model,
@@ -194,25 +225,28 @@ export const useChatStore = defineStore('chat', {
   },
 
   actions: {
-    _attachmentPolicyForProvider(providerId = this.composerState.providerId) {
-      const provider = getProviderById(providerId)
-      const policy = provider?.attachmentPolicy || {
-        allowRemoteUpload: true,
-        allowedMimes: null,
+    _attachmentPolicyForCurrentModel() {
+      const policy = this.currentModelCapabilities.attachments || {}
+      if (policy.enabled !== true) {
+        return {
+          allowRemoteUpload: false,
+          allowedMimes: new Set(),
+          maxInlineFileSize: MAX_INLINE_ATTACHMENT_SIZE,
+        }
       }
       return {
         ...policy,
-        maxInlineFileSize: MAX_INLINE_ATTACHMENT_SIZE,
+        allowRemoteUpload: policy.allowRemoteUpload === true,
+        allowedMimes: policy.allowedMimes || null,
+        maxInlineFileSize:
+          policy.maxInlineFileSize || MAX_INLINE_ATTACHMENT_SIZE,
       }
     },
 
     _createAttachmentBucket(options = {}) {
       return createAttachmentBucket({
         ...options,
-        policy: () =>
-          this._attachmentPolicyForProvider(
-            this.currentRequestConfig.providerId
-          ),
+        policy: () => this._attachmentPolicyForCurrentModel(),
         uploadFn: async (file, uploadOptions) => {
           const provider = getProviderById(this.currentRequestConfig.providerId)
           if (typeof provider.uploadAttachment !== 'function') {
@@ -240,6 +274,13 @@ export const useChatStore = defineStore('chat', {
       this.composerState.model = typeof model === 'string' ? model : null
     },
 
+    async selectModel(model) {
+      this.setActiveModel(model)
+      this.setProviderId(this.findProviderForModel(model))
+      await this.ensureModelCapabilities(model)
+      this._pruneToolsForCurrentModel()
+    },
+
     findProviderForModel(model) {
       for (const group of this.appState.availableModels || []) {
         if (Array.isArray(group.models) && group.models.includes(model)) {
@@ -255,12 +296,6 @@ export const useChatStore = defineStore('chat', {
 
     setProviderId(providerId) {
       this.composerState.providerId = providerId || getDefaultProviderId()
-      const provider = getProviderById(this.composerState.providerId)
-      const supportsTools =
-        provider?.supportedTools && provider.supportedTools.length > 0
-      if (!supportsTools) {
-        this.composerState.tools = createDefaultToolSettings()
-      }
     },
 
     setPrompt(value) {
@@ -289,6 +324,34 @@ export const useChatStore = defineStore('chat', {
         ...this.composerState.tools,
         [name]: !this.composerState.tools[name],
       }
+    },
+
+    async ensureModelCapabilities(model = this.composerState.model) {
+      if (!model) return EMPTY_CAPABILITIES
+      const providerId = this.findProviderForModel(model)
+      const key = capabilityKey(providerId, model)
+      const cached = this.appState.modelCapabilitiesByKey[key]
+      if (cached) return cached
+      const capabilities = await getModelCapabilities(model, providerId)
+      this.appState.modelCapabilitiesByKey = {
+        ...this.appState.modelCapabilitiesByKey,
+        [key]: capabilities,
+      }
+      return capabilities
+    },
+
+    _pruneToolsForCurrentModel() {
+      const toolDefinitions = this.currentToolDefinitions
+      const defaults = createDefaultToolSettings()
+      const next = {}
+      for (const key of Object.keys(toolDefinitions)) {
+        if (!toolDefinitions[key]?.enabled) continue
+        next[key] =
+          typeof this.composerState.tools[key] === 'boolean'
+            ? this.composerState.tools[key]
+            : !!defaults[key]
+      }
+      this.composerState.tools = next
     },
 
     bumpScrollSignal() {
@@ -550,12 +613,9 @@ export const useChatStore = defineStore('chat', {
 
     _getDefaultSystemPrompt() {
       const model = this.composerState.model
-      const fallbackProviderId =
-        this.composerState.providerId || getDefaultProviderId()
       const normalized = readModelSettingsFromState(
         this.appState.modelSettingsByModel,
-        model,
-        fallbackProviderId
+        model
       )
       const settings = cloneModelSettings(normalized)
       return settings.systemPrompt || ''
@@ -578,8 +638,7 @@ export const useChatStore = defineStore('chat', {
       const message = this._findMessageByRequestId(stream.requestId)
       if (!message) return
 
-      const providerId = stream.providerId || getDefaultProviderId()
-      const parsed = apiAdapter.parseApiResponse(rawChunk, providerId) || {}
+      const parsed = apiAdapter.parseApiResponse(rawChunk) || {}
 
       const deltaText = parsed.deltaText ?? ''
 

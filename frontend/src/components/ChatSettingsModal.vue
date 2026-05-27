@@ -263,7 +263,6 @@ import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 
 import { useChatConfigStore } from '../stores/chatConfig'
-import { useChatStore } from '../stores/chat'
 import {
   createAttachmentBucket,
   cloneAttachment,
@@ -285,7 +284,6 @@ const props = defineProps({
 })
 
 const chatConfigStore = useChatConfigStore()
-const chatStore = useChatStore()
 
 const activeSettings = computed(() => chatConfigStore.activeSettings)
 
@@ -371,7 +369,6 @@ const handleGlobalMouseUp = () => {
 
 function createAutoMessageEntry(initial = {}) {
   const bucket = createAttachmentBucket({
-    defaultProviderId: () => chatStore.composerState.providerId,
     allowRemoteUpload: false,
     maxFileSize: AUTO_ATTACHMENT_MAX_FILE_SIZE,
   })
@@ -501,9 +498,7 @@ function handleOverlayMouseLeave(event) {
 function onAutoAttachmentChange(location, entry, event) {
   const files = event.target.files
   if (!files || !files.length) return
-  entry.bucket.addFiles(files, {
-    providerId: chatStore.composerState.providerId,
-  })
+  entry.bucket.addFiles(files)
   event.target.value = ''
 }
 
@@ -519,9 +514,7 @@ function onAutoDrop(entry, event) {
   entry.dragCounter = 0
   const files = event.dataTransfer?.files
   if (!files || !files.length) return
-  entry.bucket.addFiles(files, {
-    providerId: chatStore.composerState.providerId,
-  })
+  entry.bucket.addFiles(files)
 }
 
 function formatSize(bytes) {

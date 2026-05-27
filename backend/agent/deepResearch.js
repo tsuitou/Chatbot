@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { makeResolveFirstExisting } from '../utils.js'
-import { supportsServerSideToolInvocations, normalizeGeminiUsage } from '../providers/shared.js'
+import { geminiEvent, textEvent } from '../providers/events.js'
+import { supportsServerSideToolInvocations } from '../providers/shared.js'
 
 const DEFAULT_RETENTION_DAYS = 55
 const AGENT_TOOLS_FILE = 'agent-tools.json'
@@ -327,14 +328,15 @@ function buildSessionBlock({
 
 function emitPart(socket, { chatId, requestId, text, thought = false, metadata }) {
   if (!text && !metadata) return
-  const payload = {
+  const event = textEvent({
     chatId,
     requestId,
     provider: 'gemini',
-  }
-  if (text) payload.parts = [{ text, thought }]
-  if (metadata) payload.metadata = metadata
-  socket.emit('chunk', payload)
+    text,
+    thought,
+    metadata,
+  })
+  socket.emit('chunk', event)
 }
 
 function normalizeThoughtDelta(delta) {
@@ -496,15 +498,11 @@ async function streamAgentModelTurn({
   for await (const chunk of stream) {
     usage = chunk?.usageMetadata || usage
     functionCall = functionCall || functionCallFromChunk(chunk)
-    socket.emit('chunk', {
+    socket.emit('chunk', geminiEvent({
       chatId,
       requestId,
-      parts: chunk?.candidates?.[0]?.content?.parts,
-      usage: normalizeGeminiUsage(chunk?.usageMetadata),
-      finishReason: chunk?.candidates?.[0]?.finishReason,
-      grounding: chunk?.candidates?.[0]?.groundingMetadata,
-      provider: 'gemini',
-    })
+      chunk,
+    }))
   }
   return { functionCall, usage }
 }

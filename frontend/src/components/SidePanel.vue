@@ -157,10 +157,9 @@ const streamingEnabled = computed({
 })
 
 // --- Methods ---
-const onModelChange = (event) => {
+const onModelChange = async (event) => {
   const model = event.target.value
-  store.setActiveModel(model)
-  store.setProviderId(store.findProviderForModel(model))
+  await store.selectModel(model)
 }
 const prepareNewChat = () => store.prepareNewChat()
 const loadChat = (chatId) => store.loadChat(chatId)

@@ -1,6 +1,9 @@
 import { parseModelResponse } from './parser'
-import { getProviderById } from './providers'
 import { escapeHtml } from './htmlSafety'
+import {
+  buildDisplayIndicators,
+  buildMetadataHtmlForExport,
+} from './messageMetadata'
 
 const ICONS = {
   file: `
@@ -141,26 +144,6 @@ function renderSystemBubble({ message, indicators, thoughtHtml, hasThoughts }) {
   `
 }
 
-function buildSystemMeta(message, provider) {
-  const resolvedProvider =
-    provider || getProviderById(message?.configSnapshot?.providerId)
-  if (!resolvedProvider) return ''
-
-  if (resolvedProvider.buildMetadataHtmlForExport) {
-    return resolvedProvider.buildMetadataHtmlForExport(message)
-  }
-  if (resolvedProvider.buildMetadataHtml) {
-    return resolvedProvider
-      .buildMetadataHtml(message)
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => `<div class="metadata-item">${escapeHtml(line)}</div>`)
-      .join('')
-  }
-  return ''
-}
-
 function renderErrorAlert(message) {
   if (message.status !== 'error') return ''
   const error = message.metadata?.error
@@ -172,14 +155,11 @@ async function buildMessageHtml(message) {
   const senderLabel = message.sender === 'user' ? 'User' : 'Model'
   const timestamp = formatTimestamp(message.createdAt)
   const bubbleClass = message.sender === 'user' ? 'bubble-user' : 'bubble-model'
-  const provider = getProviderById(message?.configSnapshot?.providerId)
   let systemIndicators = []
-  if (provider?.buildDisplayIndicators) {
-    try {
-      systemIndicators = provider.buildDisplayIndicators(message) || []
-    } catch (error) {
-      console.warn('Failed to build system indicators for export:', error)
-    }
+  try {
+    systemIndicators = buildDisplayIndicators(message) || []
+  } catch (error) {
+    console.warn('Failed to build system indicators for export:', error)
   }
 
   const mainContent =
@@ -218,7 +198,7 @@ async function buildMessageHtml(message) {
         hasThoughts,
       })
     }
-    metadataHtml = buildSystemMeta(message, provider)
+    metadataHtml = buildMetadataHtmlForExport(message)
   }
 
   const metadataBlock = metadataHtml

@@ -2,7 +2,10 @@ import { defineStore } from 'pinia'
 import { watch } from 'vue'
 import { useChatStore } from './chat'
 import { parseModelResponse } from '../services/parser'
-import { getProviderById } from '../services/providers'
+import {
+  buildDisplayIndicators,
+  buildMetadataHtml,
+} from '../services/messageMetadata'
 
 const PREVIEWABLE_MIMES = new Set([
   'image/png',
@@ -16,27 +19,6 @@ const PREVIEWABLE_MIMES = new Set([
   'text/javascript',
   'application/json',
 ])
-
-function providerForMessage(message) {
-  const providerId = message?.configSnapshot?.providerId
-  return getProviderById(providerId)
-}
-
-function buildIndicators(message) {
-  const provider = providerForMessage(message)
-  if (provider.buildDisplayIndicators) {
-    return provider.buildDisplayIndicators(message)
-  }
-  return []
-}
-
-function buildMetadataHtml(message) {
-  const provider = providerForMessage(message)
-  if (provider.buildMetadataHtml) {
-    return provider.buildMetadataHtml(message)
-  }
-  return ''
-}
 
 export const useDisplayStore = defineStore('display', {
   state: () => ({
@@ -291,7 +273,7 @@ export const useDisplayStore = defineStore('display', {
       const textLen = message.content?.text?.length ?? 0
       const thoughtLen = message.runtime?.system?.thoughts?.rawText?.length ?? 0
       const attachLen = message.attachments?.length ?? 0
-      const indicatorCount = buildIndicators(message).length
+      const indicatorCount = buildDisplayIndicators(message).length
       // We also need to consider UI flags that might change the group structure/content
       // Note: isCollapsed/shouldRender are injected AFTER group creation/retrieval,
       // so they don't strictly need to be in this key for the *inner* structure,
@@ -310,7 +292,7 @@ export const useDisplayStore = defineStore('display', {
         key: `${message.id}:system`,
         messageId: message.id,
         status: message.status,
-        indicators: buildIndicators(message),
+        indicators: buildDisplayIndicators(message),
         thoughtSegments,
         hasThoughts: thoughtSegments.length > 0,
         isStreamingThoughts: !!thoughtsState.isStreaming,

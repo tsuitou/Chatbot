@@ -1,12 +1,3 @@
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
 export function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     if (!blob) {
@@ -34,17 +25,6 @@ export function blobToBase64(blob) {
   })
 }
 
-export function parseUsage(u) {
-  if (!u) return null
-  return {
-    prompt: u.inputTokens ?? null,
-    output: u.outputTokens ?? null,
-    reasoning: u.reasoningTokens ?? null,
-    total: u.totalTokens ?? null,
-    raw: u,
-  }
-}
-
 export function normalizeError(rawError, phase, providerId) {
   const status = rawError?.status || 500
   let code = 'E_UNKNOWN'
@@ -64,11 +44,6 @@ export function normalizeError(rawError, phase, providerId) {
   }
 }
 
-export function appendIfDefined(target, key, value) {
-  if (value === undefined || value === null || value === '') return
-  target[key] = value
-}
-
 export function base64ToBlob(base64, mimeType) {
   const byteCharacters = atob(base64)
   const byteNumbers = new Array(byteCharacters.length)
@@ -77,18 +52,4 @@ export function base64ToBlob(base64, mimeType) {
   }
   const byteArray = new Uint8Array(byteNumbers)
   return new Blob([byteArray], { type: mimeType })
-}
-
-export function parametersFromConfig(config) {
-  if (!config) return {}
-  return config.parameters && typeof config.parameters === 'object'
-    ? config.parameters
-    : {}
-}
-
-export function optionsFromConfig(config) {
-  if (!config) return {}
-  return config.options && typeof config.options === 'object'
-    ? config.options
-    : {}
 }

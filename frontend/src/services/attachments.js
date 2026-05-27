@@ -303,8 +303,7 @@ export function createAttachmentBucket(options = {}) {
     return false
   }
 
-  async function addFiles(fileList, { providerId } = {}) {
-    void providerId
+  async function addFiles(fileList) {
     const files = Array.from(fileList || [])
     if (!files.length) return
 

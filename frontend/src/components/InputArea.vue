@@ -68,33 +68,38 @@
           multiple
           @change="handleFileChange"
         />
-        <button class="icon-button" title="Attach file" @click="openFileInput">
+        <button
+          v-if="supportsAttachments"
+          class="icon-button"
+          title="Attach file"
+          @click="openFileInput"
+        >
           <font-awesome-icon icon="paperclip" />
         </button>
         <button
-          v-if="supportsTool('useUrlContext')"
+          v-if="supportsTool('urlContext')"
           class="icon-button"
-          :class="{ active: toolSettings.useUrlContext }"
+          :class="{ active: toolSettings.urlContext }"
           title="Enable Url Context"
-          @click="toggleTool('useUrlContext')"
+          @click="toggleTool('urlContext')"
         >
           <font-awesome-icon icon="link" />
         </button>
         <button
-          v-if="supportsTool('useGrounding')"
+          v-if="supportsTool('grounding')"
           class="icon-button"
-          :class="{ active: toolSettings.useGrounding }"
+          :class="{ active: toolSettings.grounding }"
           title="Enable Search Grounding"
-          @click="toggleTool('useGrounding')"
+          @click="toggleTool('grounding')"
         >
           <font-awesome-icon icon="search" />
         </button>
         <button
-          v-if="supportsTool('useCodeExecution')"
+          v-if="supportsTool('codeExecution')"
           class="icon-button"
-          :class="{ active: toolSettings.useCodeExecution }"
+          :class="{ active: toolSettings.codeExecution }"
           title="Enable Code Execution"
-          @click="toggleTool('useCodeExecution')"
+          @click="toggleTool('codeExecution')"
         >
           <font-awesome-icon icon="code" />
         </button>
@@ -117,7 +122,6 @@ import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { getFileTypeIcon } from '../utils/fileIcons'
 import { BlobUrlManager } from '../utils/blobUrlManager'
-import { getProviderById } from '../services/providers'
 const store = useChatStore()
 const fileInput = ref(null)
 const promptInput = ref(null)
@@ -133,12 +137,13 @@ const prompt = computed({
 
 const toolSettings = computed(() => store.composerState.tools)
 const supportsTool = (toolName) => {
-  const providerId = store.currentRequestConfig.providerId
-  const provider = getProviderById(providerId)
-  return provider?.supportedTools?.includes(toolName) ?? false
+  return store.currentToolDefinitions?.[toolName]?.enabled === true
 }
 
 const attachments = computed(() => store.composerBucket.items)
+const supportsAttachments = computed(
+  () => store.currentModelCapabilities.attachments?.enabled === true
+)
 const isSending = computed(() => store.isGenerating)
 const isDragging = computed(() => dragCounter.value > 0)
 const isUploadingFiles = computed(() => {
@@ -296,14 +301,14 @@ const handleShiftTab = (event) => {
 
 // --- File Handling ---
 const openFileInput = () => {
+  if (!supportsAttachments.value) return
   fileInput.value.click()
 }
 
 const handleFileChange = (event) => {
   const files = event.target.files
   if (files && files.length > 0) {
-    const providerId = store.currentRequestConfig.providerId
-    store.composerBucket.addFiles(files, { providerId })
+    store.composerBucket.addFiles(files)
   }
   event.target.value = '' // Reset input
 }
@@ -325,8 +330,7 @@ const onDrop = (event) => {
   dragCounter.value = 0
   const files = event.dataTransfer.files
   if (files && files.length > 0) {
-    const providerId = store.currentRequestConfig.providerId
-    store.composerBucket.addFiles(files, { providerId })
+    store.composerBucket.addFiles(files)
   }
 }
 

@@ -3,14 +3,17 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import {
   buildConfigRanges,
+  buildModelCapabilities,
   getEffectiveCapabilities,
   loadCapabilities,
 } from './capabilities.js'
+import { eventFromParts } from './events.js'
+import { applyParameterMap, mergeText } from './request.js'
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
 
-function normalizeUsage(u) {
+function normalizeClaudeUsage(u) {
   if (!u) return null
   const input = u.input_tokens ?? null
   const output = u.output_tokens ?? null
@@ -34,70 +37,148 @@ export class ClaudeProvider {
     this.defaultSystemInstruction = systemInstruction
   }
 
-  _normalizeRequest(modelName, messages, config = {}) {
+  _buildConfig(modelName, request) {
+    const requestParameters = request?.parameters || {}
     const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
-    const ranges = buildConfigRanges(parameters, features)
+    const ranges = buildConfigRanges(parameters)
 
-    const request = {
-      model: modelName,
-      messages,
-      ...config,
-    }
+    const config = {}
+    applyParameterMap(
+      config,
+      requestParameters,
+      this.capabilities?.api?.parameterMap
+    )
 
-    if (request.max_tokens === undefined || request.max_tokens === null) {
+    if (config.max_tokens === undefined || config.max_tokens === null) {
       if (ranges.maxOutputTokens && ranges.maxOutputTokens.default !== undefined) {
-        request.max_tokens = ranges.maxOutputTokens.default
+        config.max_tokens = ranges.maxOutputTokens.default
       }
     }
 
-    if (request.temperature === undefined || request.temperature === null) {
+    if (config.temperature === undefined || config.temperature === null) {
       if (ranges.temperature && ranges.temperature.default !== undefined) {
-        request.temperature = ranges.temperature.default
+        config.temperature = ranges.temperature.default
       }
     }
 
-    if (request.top_p === undefined || request.top_p === null) {
+    if (config.top_p === undefined || config.top_p === null) {
       if (ranges.topP && ranges.topP.default !== undefined) {
-        request.top_p = ranges.topP.default
+        config.top_p = ranges.topP.default
       }
     }
 
-    if (request.top_k === undefined || request.top_k === null) {
+    if (config.top_k === undefined || config.top_k === null) {
       if (ranges.topK && ranges.topK.default !== undefined) {
-        request.top_k = ranges.topK.default
+        config.top_k = ranges.topK.default
       }
     }
 
-    if (request.thinking === undefined || request.thinking === null) {
+    const thinkingBudget = Number(requestParameters.thinkingBudget)
+    if (thinkingBudget === 0) {
+      config.thinking = { type: 'disabled' }
+    } else if (thinkingBudget === -1) {
+      config.thinking = { type: 'adaptive' }
+    } else if (Number.isFinite(thinkingBudget) && thinkingBudget >= 1024) {
+      config.thinking = {
+        type: 'enabled',
+        budget_tokens: thinkingBudget,
+      }
+      const currentMax = config.max_tokens || 64000
+      if (currentMax <= thinkingBudget) {
+        config.max_tokens = thinkingBudget + 1024
+      }
+    }
+
+    if (config.thinking === undefined || config.thinking === null) {
       if (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined) {
         const defaultBudget = ranges.thinkingBudget.default
         if (defaultBudget === -1) {
-          request.thinking = { type: 'adaptive' }
+          config.thinking = { type: 'adaptive' }
         } else if (defaultBudget >= 1024) {
-          request.thinking = {
+          config.thinking = {
             type: 'enabled',
             budget_tokens: defaultBudget
           }
           // Ensure max_tokens is strictly greater than budget_tokens
-          const currentMax = request.max_tokens || 64000
+          const currentMax = config.max_tokens || 64000
           if (currentMax <= defaultBudget) {
-            request.max_tokens = defaultBudget + 1024
+            config.max_tokens = defaultBudget + 1024
           }
         }
       }
-    } else if (request.thinking && request.thinking.type === 'disabled') {
-      delete request.thinking
+    } else if (config.thinking && config.thinking.type === 'disabled') {
+      delete config.thinking
     }
 
-    if (!request.system && this.defaultSystemInstruction) {
-      request.system = this.defaultSystemInstruction
+    if (request?.systemInstruction || this.defaultSystemInstruction) {
+      config.system = request?.systemInstruction || this.defaultSystemInstruction
     }
-    return request
+    return config
   }
 
-  async *generateStream(modelName, messages, config, chatId, requestId) {
-    const request = this._normalizeRequest(modelName, messages, config)
-    const stream = this.anthropic.messages.stream(request)
+  _buildContentBlock(part) {
+    if (part?.type === 'text') {
+      return { type: 'text', text: part.text || '' }
+    }
+    if (part?.type !== 'file') return null
+    if (!part.data) {
+      throw new Error('Claude attachments must be sent as inline data.')
+    }
+    const mimeType = part.mimeType || 'application/octet-stream'
+    if (mimeType.startsWith('image/')) {
+      return {
+        type: 'image',
+        source: { type: 'base64', media_type: mimeType, data: part.data },
+      }
+    }
+    return {
+      type: 'document',
+      source: { type: 'base64', media_type: mimeType, data: part.data },
+    }
+  }
+
+  _buildMessagesAndSystem(messages = [], system) {
+    const result = []
+    let mergedSystem = system
+    for (const message of messages) {
+      if (message.role === 'system') {
+        const text = (message.parts || [])
+          .filter((part) => part?.type === 'text')
+          .map((part) => part.text || '')
+          .join('\n')
+        mergedSystem = mergeText(mergedSystem, text)
+        continue
+      }
+      if (!['user', 'model'].includes(message.role)) continue
+      const content = (message.parts || [])
+        .map((part) => this._buildContentBlock(part))
+        .filter(Boolean)
+      result.push({
+        role: message.role === 'model' ? 'assistant' : 'user',
+        content: content.length ? content : [{ type: 'text', text: '' }],
+      })
+    }
+    return { messages: result, system: mergedSystem }
+  }
+
+  _buildRequest(request) {
+    const config = this._buildConfig(request.model, request)
+    const { messages, system } = this._buildMessagesAndSystem(
+      request.messages,
+      config.system
+    )
+    if (system) config.system = system
+    else delete config.system
+    return {
+      model: request.model,
+      messages,
+      ...config,
+    }
+  }
+
+  async *generateStream(request) {
+    const sdkRequest = this._buildRequest(request)
+    const stream = this.anthropic.messages.stream(sdkRequest)
     const rawUsage = { input_tokens: null, output_tokens: null }
 
     for await (const event of stream) {
@@ -105,44 +186,59 @@ export class ClaudeProvider {
         const u = event.message?.usage
         if (u?.input_tokens != null) rawUsage.input_tokens = u.input_tokens
         if (u?.output_tokens != null) rawUsage.output_tokens = u.output_tokens
-        yield { chatId, requestId, provider: 'claude', usage: normalizeUsage(rawUsage) }
+        yield eventFromParts({
+          chatId: request.chatId,
+          requestId: request.requestId,
+          provider: 'claude',
+          usage: normalizeClaudeUsage(rawUsage),
+        })
       } else if (event.type === 'content_block_delta') {
         const delta = event.delta || {}
         if (delta.type === 'text_delta') {
-          yield { chatId, requestId, provider: 'claude', parts: [{ text: delta.text || '' }] }
+          yield eventFromParts({
+            chatId: request.chatId,
+            requestId: request.requestId,
+            provider: 'claude',
+            parts: [{ text: delta.text || '' }],
+          })
         } else if (delta.type === 'thinking_delta' || delta.type === 'thinking') {
-          yield { chatId, requestId, provider: 'claude', parts: [{ text: delta.thinking || '', thought: true }] }
+          yield eventFromParts({
+            chatId: request.chatId,
+            requestId: request.requestId,
+            provider: 'claude',
+            parts: [{ text: delta.thinking || '', thought: true }],
+          })
         }
       } else if (event.type === 'message_delta') {
         const u = event.usage
         if (u?.output_tokens != null) rawUsage.output_tokens = u.output_tokens
-        yield {
-          chatId,
-          requestId,
+        yield eventFromParts({
+          chatId: request.chatId,
+          requestId: request.requestId,
           provider: 'claude',
-          usage: normalizeUsage(rawUsage),
+          usage: normalizeClaudeUsage(rawUsage),
           finishReason: event.delta?.stop_reason || null,
-        }
+        })
       }
     }
   }
 
-  async generate(modelName, messages, config, chatId, requestId) {
-    const request = this._normalizeRequest(modelName, messages, config)
-    const result = await this.anthropic.messages.create(request)
+  async generate(request) {
+    const sdkRequest = this._buildRequest(request)
+    const result = await this.anthropic.messages.create(sdkRequest)
     const parts = (result.content || []).map((block) => {
       if (block.type === 'text') return { text: block.text }
       if (block.type === 'thinking') return { text: block.thinking, thought: true }
       return null
     }).filter(Boolean)
-    return {
-      chatId,
-      requestId,
+    return eventFromParts({
+      chatId: request.chatId,
+      requestId: request.requestId,
       provider: 'claude',
       parts,
-      usage: normalizeUsage(result.usage),
+      usage: normalizeClaudeUsage(result.usage),
       finishReason: result.stop_reason || null,
-    }
+    })
   }
 
   async listModels() {
@@ -151,8 +247,7 @@ export class ClaudeProvider {
     return models.map((model) => model.id).filter(Boolean)
   }
 
-  async getModelConfigRanges(modelName) {
-    const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
-    return buildConfigRanges(parameters, features)
+  async getModelCapabilities(modelName) {
+    return buildModelCapabilities(this.capabilities, modelName)
   }
 }

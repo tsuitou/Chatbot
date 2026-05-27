@@ -1,8 +1,40 @@
 {
   "provider": "gemini",
+  "label": "Google Gemini",
+  "api": {
+    "parameterMap": {
+      "temperature": "temperature",
+      "topP": "topP",
+      "topK": "topK",
+      "maxOutputTokens": "maxOutputTokens"
+    }
+  },
   "defaults": {
     "features": {
       "systemInstruction": true
+    },
+    "tools": {
+      "urlContext": {
+        "enabled": true,
+        "label": "URL Context",
+        "icon": "link"
+      },
+      "grounding": {
+        "enabled": true,
+        "label": "Search Grounding",
+        "icon": "search"
+      },
+      "codeExecution": {
+        "enabled": true,
+        "label": "Code Execution",
+        "icon": "code"
+      }
+    },
+    "attachments": {
+      "enabled": true,
+      "allowRemoteUpload": true,
+      "allowedMimes": null,
+      "maxInlineFileSize": 10485760
     },
     "parameters": {
       "temperature": {
@@ -22,8 +54,12 @@
       "modelQuery": "image",
       "features": {
         "systemInstruction": false,
-        "tools": false,
         "imageConfigParams": ["aspectRatio", "imageSize", "personGeneration"]
+      },
+      "tools": {
+        "urlContext": { "enabled": false },
+        "grounding": { "enabled": false },
+        "codeExecution": { "enabled": false }
       },
       "parameters": {
         "temperature": null,

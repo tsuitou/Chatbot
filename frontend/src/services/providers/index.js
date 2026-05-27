@@ -6,13 +6,13 @@ const registry = {
   [claude.id]: claude,
 }
 
-const fallbackProviderId = gemini.id
+const defaultProviderId = gemini.id
 
 export function getProviderById(providerId) {
   if (providerId && registry[providerId]) {
     return registry[providerId]
   }
-  return registry[fallbackProviderId]
+  return registry[defaultProviderId]
 }
 
 export function listProviders() {
@@ -20,5 +20,5 @@ export function listProviders() {
 }
 
 export function getDefaultProviderId() {
-  return fallbackProviderId
+  return defaultProviderId
 }

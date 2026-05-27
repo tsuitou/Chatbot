@@ -17,6 +17,11 @@ const segmentProcessor = unified()
   .use(rehypeKatex)
   .use(rehypeStringify)
 
+const parseProcessor = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath, { singleDollarTextMath: false })
+
 export async function parseModelResponse(rawText) {
   if (!rawText) return []
   const {
@@ -26,11 +31,7 @@ export async function parseModelResponse(rawText) {
   } = normalizeLatexBrackets(rawText)
   const normalizedText = splitTrailingFence(latexNormalizedText)
   const segments = []
-  const tree = unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(remarkMath, { singleDollarTextMath: false })
-    .parse(normalizedText)
+  const tree = parseProcessor.parse(normalizedText)
   sanitizeMarkdownUrls(tree)
   injectPlaceholderMath(tree, blockPlaceholders, inline)
   let nonCodeNodesBuffer = []

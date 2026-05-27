@@ -51,6 +51,13 @@ socket.on('error', (rawError) => {
   store.handleStreamError(rawError)
 })
 
+socket.on('frontend_reload', (payload) => {
+  console.info('Frontend reload requested by backend:', payload)
+  if (typeof window !== 'undefined' && window.location) {
+    window.location.reload()
+  }
+})
+
 export const connectSocket = () => {
   if (!socket.connected) {
     socket.connect()

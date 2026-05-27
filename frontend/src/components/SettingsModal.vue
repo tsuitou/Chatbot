@@ -146,7 +146,6 @@
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useChatStore } from '../stores/chat'
-import { getConfigRanges } from '../services/api'
 import { showSuccessToast } from '../services/notification'
 import * as db from '../services/db'
 import {
@@ -155,15 +154,13 @@ import {
   cloneSettings,
   serializeSettings,
 } from '../services/modelConfig'
-import { getDefaultProviderId } from '../services/providers'
 const emit = defineEmits(['close'])
 const store = useChatStore()
 
 const availableModels = computed(() => store.availableModels)
 const allModelSettings = ref({})
 const selectedModel = ref('')
-const configRanges = ref({})
-const isLoadingRanges = ref(false)
+const modelCapabilities = ref({})
 const currentSettings = ref(createEmptySettings())
 
 const isOverlayMouseDown = ref(false)
@@ -177,15 +174,9 @@ const handleGlobalMouseUp = () => {
 
 const allModels = computed(() => store.allAvailableModels)
 
-const fallbackProviderId = (modelName = selectedModel.value) =>
-  modelName
-    ? store.findProviderForModel(modelName)
-    : store.composerState.providerId || getDefaultProviderId()
-
 const ensureProvider = (settings, modelName = selectedModel.value) => {
   const next = cloneSettings(settings)
-  next.providerId =
-    store.findProviderForModel(modelName) || fallbackProviderId(modelName)
+  next.providerId = modelName ? store.findProviderForModel(modelName) : null
   return next
 }
 
@@ -210,31 +201,25 @@ const loadSettingsForModel = (modelName) => {
   }
 }
 
-const fetchConfigRangesForModel = async (modelName) => {
+const fetchCapabilitiesForModel = async (modelName) => {
   if (!modelName) {
-    configRanges.value = {}
+    modelCapabilities.value = {}
     return
   }
-  isLoadingRanges.value = true
   try {
-    const providerId = store.findProviderForModel(modelName)
-    configRanges.value = await getConfigRanges(modelName, providerId)
+    modelCapabilities.value = await store.ensureModelCapabilities(modelName)
   } catch (error) {
-    console.error('Failed to fetch config ranges:', error)
-    configRanges.value = {}
-  } finally {
-    isLoadingRanges.value = false
+    console.error('Failed to fetch model capabilities:', error)
+    modelCapabilities.value = {}
   }
 }
 
 // --- Dynamic Parameters Logic ---
 
-const SKIP_RANGE_KEYS = new Set(['features'])
-
 const dynamicParameters = computed(() => {
-  const ranges = configRanges.value || {}
+  const ranges = modelCapabilities.value?.parameters || {}
   return Object.entries(ranges)
-    .filter(([key, def]) => !SKIP_RANGE_KEYS.has(key) && def && typeof def === 'object')
+    .filter(([, def]) => def && typeof def === 'object')
     .map(([key, def]) => {
       const base = { key, label: def.label || key, default: def.default }
 
@@ -248,7 +233,9 @@ const dynamicParameters = computed(() => {
 
       // number / integer
       const hasRange = def.min !== undefined && def.max !== undefined
-      const specialValues = Array.isArray(def.specialValues) ? def.specialValues : []
+      const specialValues = Array.isArray(def.specialValues)
+        ? def.specialValues
+        : []
 
       if (!hasRange && specialValues.length > 0) {
         return { ...base, type: 'enum', options: specialValues }
@@ -271,11 +258,11 @@ const dynamicParameters = computed(() => {
 })
 
 const supportsIncludeThoughts = computed(() => {
-  return configRanges.value?.features?.includeThoughts === true
+  return modelCapabilities.value?.features?.includeThoughts === true
 })
 
 const supportsSystemInstruction = computed(() => {
-  const features = configRanges.value?.features
+  const features = modelCapabilities.value?.features
   // Default to true if features not loaded yet or undefined, unless explicitly false
   return features?.systemInstruction !== false
 })
@@ -285,9 +272,7 @@ onMounted(async () => {
   const stored = await db.getModelSettings()
   const normalized = {}
   for (const [modelName, entry] of Object.entries(stored)) {
-    normalized[modelName] = normalizeSettingsEntry(entry, {
-      fallbackProviderId: fallbackProviderId(),
-    })
+    normalized[modelName] = normalizeSettingsEntry(entry)
   }
   allModelSettings.value = normalized
 
@@ -299,7 +284,7 @@ onMounted(async () => {
     ''
   selectedModel.value = modelToShow
   loadSettingsForModel(modelToShow)
-  fetchConfigRangesForModel(modelToShow)
+  fetchCapabilitiesForModel(modelToShow)
 })
 
 watch(selectedModel, (newModel, oldModel) => {
@@ -307,7 +292,7 @@ watch(selectedModel, (newModel, oldModel) => {
     persistCurrentSettings(oldModel)
   }
   loadSettingsForModel(newModel)
-  fetchConfigRangesForModel(newModel)
+  fetchCapabilitiesForModel(newModel)
 })
 
 onBeforeUnmount(() => {

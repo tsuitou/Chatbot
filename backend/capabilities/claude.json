@@ -1,8 +1,31 @@
 {
   "provider": "claude",
+  "label": "Anthropic Claude",
+  "api": {
+    "parameterMap": {
+      "temperature": "temperature",
+      "topP": "top_p",
+      "topK": "top_k",
+      "maxOutputTokens": "max_tokens"
+    }
+  },
   "defaults": {
     "features": {
       "systemInstruction": true
+    },
+    "tools": {},
+    "attachments": {
+      "enabled": true,
+      "allowRemoteUpload": false,
+      "allowedMimes": [
+        "text/plain",
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+      ],
+      "maxInlineFileSize": 10485760
     },
     "parameters": {
       "temperature": {

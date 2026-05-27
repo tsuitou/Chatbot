@@ -327,8 +327,7 @@ const handleShiftTab = (event) => {
 const handleFileChange = (event) => {
   const files = event.target.files
   if (files && files.length > 0) {
-    const providerId = store.currentRequestConfig.providerId
-    store.editorBucket?.addFiles(files, { providerId })
+    store.editorBucket?.addFiles(files)
   }
   event.target.value = '' // Reset input
 }
@@ -350,8 +349,7 @@ const onDrop = (event) => {
   dragCounter.value = 0
   const files = event.dataTransfer.files
   if (files && files.length > 0) {
-    const providerId = store.currentRequestConfig.providerId
-    store.editorBucket?.addFiles(files, { providerId })
+    store.editorBucket?.addFiles(files)
   }
 }
 

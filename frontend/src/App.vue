@@ -46,8 +46,7 @@ onMounted(async () => {
       ? preferredDefaultModel
       : firstRealModel
     chatStore.setDefaultModel(defaultModel)
-    chatStore.setActiveModel(defaultModel)
-    chatStore.setProviderId(chatStore.findProviderForModel(defaultModel))
+    await chatStore.selectModel(defaultModel)
     chatConfigStore.prepareForNewChat({
       systemPrompt: chatStore.currentRequestConfig.systemInstruction || '',
     })

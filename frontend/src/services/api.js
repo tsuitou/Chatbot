@@ -49,16 +49,16 @@ export const getModels = async () => {
   }
 }
 
-export const getConfigRanges = async (modelName, providerId) => {
+export const getModelCapabilities = async (modelName, providerId) => {
   try {
     const encodedModelName = encodeURIComponent(modelName)
     const response = await apiClient.get(
-      `/models/${encodedModelName}/config-ranges`,
+      `/models/${encodedModelName}/capabilities`,
       { params: providerId ? { provider: providerId } : undefined }
     )
     return response.data
   } catch (error) {
-    console.error(`Failed to fetch config ranges for ${modelName}:`, error)
+    console.error(`Failed to fetch capabilities for ${modelName}:`, error)
     throw error
   }
 }

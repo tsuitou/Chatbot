@@ -1,11 +1,3 @@
-const LEGACY_FLAT_KEYS = [
-  'temperature',
-  'topP',
-  'maxOutputTokens',
-  'thinkingBudget',
-  'thinkingLevel',
-]
-
 /**
  * Create a deep-cloned, mutable copy of the default empty settings object.
  */
@@ -18,65 +10,46 @@ export function createEmptySettings() {
   }
 }
 
-function coerceParameterValue(value) {
+function coerceSettingValue(value) {
   if (value === '' || value === null || value === undefined) return undefined
   const num = Number(value)
   return Number.isFinite(num) ? num : value
 }
 
-function pickParametersFromLegacy(raw) {
-  const legacy = {}
-  for (const key of LEGACY_FLAT_KEYS) {
-    if (raw && raw[key] !== undefined) {
-      legacy[key] = raw[key]
-    }
-  }
+function normalizeParameters(raw) {
   const params =
     raw?.parameters && typeof raw.parameters === 'object' ? raw.parameters : {}
-  const merged = { ...legacy, ...params }
   const next = {}
-  for (const [key, value] of Object.entries(merged)) {
-    const coerced = coerceParameterValue(value)
+  for (const [key, value] of Object.entries(params)) {
+    const coerced = coerceSettingValue(value)
     if (coerced !== undefined) next[key] = coerced
   }
   return next
 }
 
-function pickOptionsFromLegacy(raw) {
-  const options = {}
-  const includeThoughts = raw?.includeThoughts
-  if (includeThoughts !== undefined) {
-    options.includeThoughts = !!includeThoughts
-  }
+function normalizeOptions(raw) {
   if (raw?.options && typeof raw.options === 'object') {
-    for (const [key, value] of Object.entries(raw.options)) {
-      if (options[key] !== undefined) continue
-      options[key] = value
-    }
+    return { ...raw.options }
   }
-  return options
+  return {}
 }
 
 /**
  * Normalize a settings entry loaded from storage into the canonical structure.
  * Falls back to empty settings if the input is invalid.
  */
-export function normalizeSettingsEntry(
-  raw,
-  { fallbackProviderId = null } = {}
-) {
+export function normalizeSettingsEntry(raw) {
   if (!raw || typeof raw !== 'object') {
     return createEmptySettings()
   }
 
   const normalized = createEmptySettings()
 
-  normalized.providerId = raw.providerId ?? fallbackProviderId ?? null
-  normalized.parameters = pickParametersFromLegacy(raw)
-  normalized.options = pickOptionsFromLegacy(raw)
-  const prompt =
-    raw.systemPrompt ?? raw.systemInstruction ?? raw.system ?? raw.systemMessage
-  normalized.systemPrompt = typeof prompt === 'string' ? prompt : ''
+  normalized.providerId = raw.providerId ?? null
+  normalized.parameters = normalizeParameters(raw)
+  normalized.options = normalizeOptions(raw)
+  normalized.systemPrompt =
+    typeof raw.systemPrompt === 'string' ? raw.systemPrompt : ''
 
   return normalized
 }

@@ -3,10 +3,14 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import {
   buildConfigRanges,
+  buildModelCapabilities,
   getEffectiveCapabilities,
   loadCapabilities,
 } from './capabilities.js'
-import { supportsServerSideToolInvocations, normalizeGeminiUsage } from './shared.js'
+import { eventFromParts, geminiEvent } from './events.js'
+import { buildGeminiContents, buildGeminiTools } from './geminiMapper.js'
+import { applyParameterMap } from './request.js'
+import { normalizeGeminiUsage, supportsServerSideToolInvocations } from './shared.js'
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
@@ -23,20 +27,29 @@ export class GeminiProvider {
     this.defaultSystemInstruction = systemInstruction
   }
 
-  _normalizeConfig(modelName, userConfig) {
-    const finalConfig = { ...userConfig };
+  _buildConfig(modelName, request) {
+    const requestParameters = request?.parameters || {}
+    const options = request?.options || {}
+    const tools = request?.tools || {}
+    const finalConfig = {}
+    const { parameters: effectiveParameters, features, tools: effectiveTools } = getEffectiveCapabilities(this.capabilities, modelName)
+    const ranges = buildConfigRanges(effectiveParameters)
 
-    const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
-    const ranges = buildConfigRanges(parameters, features)
+    applyParameterMap(
+      finalConfig,
+      requestParameters,
+      this.capabilities?.api?.parameterMap
+    )
 
-    if (features?.systemInstruction !== false && !finalConfig.systemInstruction) {
-      finalConfig.systemInstruction = this.defaultSystemInstruction;
+    if (features?.systemInstruction !== false) {
+      finalConfig.systemInstruction =
+        request?.systemInstruction || this.defaultSystemInstruction
     }
 
-    if (features?.tools === false) {
-      delete finalConfig.tools
-      delete finalConfig.toolConfig
-    } else if (supportsServerSideToolInvocations(modelName)) {
+    finalConfig.tools = buildGeminiTools(tools, effectiveTools)
+    if (!finalConfig.tools.length) delete finalConfig.tools
+
+    if (supportsServerSideToolInvocations(modelName)) {
       finalConfig.toolConfig = {
         ...(finalConfig.toolConfig || {}),
         includeServerSideToolInvocations: true,
@@ -67,12 +80,21 @@ export class GeminiProvider {
       }
     }
 
-    if (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined) {
+    if (
+      requestParameters.thinkingBudget !== undefined ||
+      requestParameters.thinkingLevel !== undefined ||
+      (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined)
+    ) {
       if (!finalConfig.thinkingConfig) {
         finalConfig.thinkingConfig = {}
       }
-      if (finalConfig.thinkingConfig.thinkingBudget === undefined || finalConfig.thinkingConfig.thinkingBudget === null) {
+      if (requestParameters.thinkingBudget !== undefined) {
+        finalConfig.thinkingConfig.thinkingBudget = requestParameters.thinkingBudget
+      } else if (finalConfig.thinkingConfig.thinkingBudget === undefined || finalConfig.thinkingConfig.thinkingBudget === null) {
         finalConfig.thinkingConfig.thinkingBudget = ranges.thinkingBudget.default
+      }
+      if (requestParameters.thinkingLevel !== undefined) {
+        finalConfig.thinkingConfig.thinkingLevel = requestParameters.thinkingLevel
       }
     }
 
@@ -80,57 +102,50 @@ export class GeminiProvider {
       ? features.imageConfigParams
       : []
     for (const key of imageConfigParams) {
-      if (finalConfig[key] === undefined) continue
+      if (requestParameters[key] === undefined) continue
       finalConfig.imageConfig = finalConfig.imageConfig || {}
-      finalConfig.imageConfig[key] = finalConfig[key]
-      delete finalConfig[key]
+      finalConfig.imageConfig[key] = requestParameters[key]
+    }
+
+    if (options.includeThoughts != null) {
+      finalConfig.thinkingConfig = finalConfig.thinkingConfig || {}
+      finalConfig.thinkingConfig.includeThoughts = !!options.includeThoughts
     }
 
     return finalConfig;
   }
 
-  async *generateStream(modelName, contents, config, chatId, requestId) {
-    const normalizedConfig = this._normalizeConfig(modelName, config);
-
-    const request = {
+  _buildRequest(request) {
+    const modelName = request.model
+    return {
       model: modelName,
-      contents,
-      config: normalizedConfig,
+      contents: buildGeminiContents(request.messages),
+      config: this._buildConfig(modelName, request),
     }
-    
-    const stream = await this.genAI.models.generateContentStream(request);
+  }
+
+  async *generateStream(request) {
+    const sdkRequest = this._buildRequest(request);
+
+    const stream = await this.genAI.models.generateContentStream(sdkRequest);
     for await (const chunk of stream) {
-        yield {
-            chatId,
-            requestId,
-            parts: chunk.candidates?.[0]?.content?.parts,
-            usage: normalizeGeminiUsage(chunk.usageMetadata),
-            finishReason: chunk.candidates?.[0]?.finishReason,
-            grounding: chunk.candidates?.[0]?.groundingMetadata,
-            provider: 'gemini'
-        }
+        yield geminiEvent({ chatId: request.chatId, requestId: request.requestId, chunk })
     }
   }
   
-  async generate(modelName, contents, config, chatId, requestId) {
-     const normalizedConfig = this._normalizeConfig(modelName, config);
-
-     const request = {
-        model: modelName,
-        contents,
-        config: normalizedConfig,
-     }
+  async generate(request) {
+     const sdkRequest = this._buildRequest(request);
      
-     const result = await this.genAI.models.generateContent(request);
-     return {
-          chatId,
-          requestId,
+     const result = await this.genAI.models.generateContent(sdkRequest);
+     return eventFromParts({
+          chatId: request.chatId,
+          requestId: request.requestId,
+          provider: 'gemini',
           parts: result?.candidates?.[0]?.content?.parts,
           usage: normalizeGeminiUsage(result?.usageMetadata),
           finishReason: result?.candidates?.[0]?.finishReason,
           grounding: result?.candidates?.[0]?.groundingMetadata,
-          provider: 'gemini'
-     }
+     })
   }
   
   async uploadFile(path, mimeType, displayName) {
@@ -162,23 +177,16 @@ export class GeminiProvider {
       return names;
   }
   
-  async getModelConfigRanges(modelName) {
-     let maxOutputTokens = null;
+  async getModelCapabilities(modelName) {
+     let ranges = {};
      try {
          const details = await this.genAI.models.get({ model: modelName });
          if (details?.outputTokenLimit) {
-             maxOutputTokens = Number(details.outputTokenLimit);
+             ranges.maxOutputTokens = { type: 'integer', label: 'Max Output Tokens', min: 1, max: Number(details.outputTokenLimit) };
          }
      } catch (e) {
          console.warn(`Failed to fetch model details for ${modelName}:`, e.message);
      }
-
-     const ranges = {};
-     if (maxOutputTokens) {
-          ranges.maxOutputTokens = { type: 'integer', label: 'Max Output Tokens', min: 1, max: maxOutputTokens };
-     }
-
-     const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
-     return buildConfigRanges(parameters, features, ranges);
+     return buildModelCapabilities(this.capabilities, modelName, ranges)
   }
 }

@@ -31,20 +31,73 @@ export function getEffectiveCapabilities(capabilities, modelName) {
   const capModel = models.find((model) =>
     String(modelName || '').includes(model.modelQuery)
   )
-  const parameters = {
-    ...(capabilities?.defaults?.parameters || {}),
-    ...(capModel?.parameters || {}),
-  }
-  const features = {
-    ...(capabilities?.defaults?.features || {}),
-    ...(capModel?.features || {}),
+  const parameters = mergeSection(
+    capabilities?.defaults?.parameters,
+    capModel?.parameters
+  )
+  const features = mergeSection(
+    capabilities?.defaults?.features,
+    capModel?.features
+  )
+  const options = mergeSection(
+    capabilities?.defaults?.options,
+    capModel?.options
+  )
+  const tools = mergeSection(capabilities?.defaults?.tools, capModel?.tools)
+  const attachments = {
+    ...(capabilities?.defaults?.attachments || {}),
+    ...(capModel?.attachments || {}),
   }
 
-  return { parameters, features, model: capModel || null }
+  return {
+    provider: capabilities?.provider,
+    label: capabilities?.label,
+    parameters,
+    features,
+    options,
+    tools,
+    attachments,
+    model: capModel || null,
+  }
 }
 
-export function buildConfigRanges(effectiveParams, effectiveFeatures, seed = {}) {
-  const ranges = { ...seed, features: effectiveFeatures }
+function mergeSection(defaults = {}, overrides = {}) {
+  const result = { ...(defaults || {}) }
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (value === null || value === undefined) {
+      delete result[key]
+    } else if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      result[key] &&
+      typeof result[key] === 'object' &&
+      !Array.isArray(result[key])
+    ) {
+      result[key] = { ...result[key], ...value }
+    } else {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+export function buildModelCapabilities(capabilities, modelName, seed = {}) {
+  const effective = getEffectiveCapabilities(capabilities, modelName)
+  return {
+    provider: effective.provider,
+    label: effective.label,
+    model: modelName,
+    features: effective.features,
+    parameters: buildConfigRanges(effective.parameters, seed),
+    options: effective.options,
+    tools: effective.tools,
+    attachments: effective.attachments,
+  }
+}
+
+export function buildConfigRanges(effectiveParams, seed = {}) {
+  const ranges = { ...seed }
 
   for (const [key, def] of Object.entries(effectiveParams || {})) {
     if (def === null || def === undefined) {

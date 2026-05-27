@@ -11,6 +11,7 @@ import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { ClaudeProvider } from './providers/claude.js'
 import { createProviderRegistry } from './providers/registry.js'
+import { buildGeminiTools } from './providers/geminiMapper.js'
 import { runAgentSession } from './agent/runner.js'
 import { makeResolveFirstExisting } from './utils.js'
 
@@ -62,6 +63,12 @@ function reloadConfig() {
     return candidate ? fs.readFileSync(candidate, 'utf-8') : undefined
   })()
   console.log('Config reloaded.')
+}
+
+function applyReloadedConfig() {
+  reloadConfig()
+  geminiProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
+  claudeProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
 }
 
 // --- Init ---
@@ -240,6 +247,34 @@ const numberOr = (v, fallback) => {
   return Number.isFinite(n) ? n : fallback
 }
 const updateConnectionInfo = (id, newStatus)  => ( newStatus === 'disconnect' ? delete connectionInfo[id] : connectionInfo[id] = { status: newStatus }  )
+const getConnectedClientCount = () => io.engine?.clientsCount ?? 0
+const requestFrontendReload = () => {
+  io.emit('frontend_reload', {
+    requestedAt: new Date().toISOString(),
+    reason: 'backend-command',
+  })
+  console.log(`Frontend reload requested for ${getConnectedClientCount()} client(s).`)
+}
+const buildAgentRequestConfig = ({ parameters = {}, tools = {} }) => {
+  const config = { ...parameters }
+  const geminiTools = buildGeminiTools(tools)
+  if (geminiTools.length) config.tools = geminiTools
+  if (
+    parameters.thinkingBudget !== undefined ||
+    parameters.thinkingLevel !== undefined
+  ) {
+    config.thinkingConfig = {}
+    if (parameters.thinkingBudget !== undefined) {
+      config.thinkingConfig.thinkingBudget = parameters.thinkingBudget
+      delete config.thinkingBudget
+    }
+    if (parameters.thinkingLevel !== undefined) {
+      config.thinkingConfig.thinkingLevel = parameters.thinkingLevel
+      delete config.thinkingLevel
+    }
+  }
+  return config
+}
 
 // --- HTTP API ---
 const apiRouter = express.Router()
@@ -291,37 +326,45 @@ apiRouter.get('/models/default', async (_req, res) => {
   }
 })
 
-// Get configurable ranges for a given model.
-// Use a regex route so model names may include slashes (e.g. "publishers/.../models/...").
-apiRouter.get(/^\/models\/(.+)\/config-ranges$/, async (req, res) => {
+apiRouter.get(/^\/models\/(.+)\/capabilities$/, async (req, res) => {
   try {
     const modelName = req.params[0]
     if (normalizeModelName(modelName) === DUMMY_MODEL_NAME) {
       return res.json({
-        temperature: { min: 0.0, max: 0.0 },
-        topP: { min: 0.0, max: 0.0 },
-        maxOutputTokens: { max: 0 },
+        provider: 'virtual',
+        model: DUMMY_MODEL_NAME,
+        label: 'Special',
+        features: { systemInstruction: false },
+        parameters: {},
+        options: {},
+        tools: {},
+        attachments: { enabled: false },
       })
     }
     if (isAgentModel(normalizeModelName(modelName))) {
       return res.json({
-        temperature: { min: 0.0, max: 0.0 },
-        topP: { min: 0.0, max: 1.0 },
-        maxOutputTokens: { max: 0 },
+        provider: 'virtual',
+        model: normalizeModelName(modelName),
+        label: 'Special',
+        features: { systemInstruction: true },
+        parameters: {},
+        options: {},
+        tools: {},
+        attachments: { enabled: false },
       })
     }
 
     const providerId = resolveProviderId(modelName, req.query.provider)
-    const ranges = await providerRegistry
+    const capabilities = await providerRegistry
       .get(providerId)
-      ?.getModelConfigRanges(modelName)
-    if (!ranges) {
+      ?.getModelCapabilities(modelName)
+    if (!capabilities) {
       return res.status(404).json({ error: 'Provider not available', message: 'Provider not available for model.' })
     }
-    res.json(ranges);
+    res.json(capabilities)
   } catch (error) {
-    console.error('config-ranges error:', error?.status, error?.message)
-    res.status(500).json({ error: 'Failed to get model config ranges', message: error?.message })
+    console.error('capabilities error:', error?.status, error?.message)
+    res.status(500).json({ error: 'Failed to get model capabilities', message: error?.message })
   }
 })
 
@@ -370,10 +413,12 @@ io.on('connection', (socket) => {
   socket.on('start_generation', async (data) => {
     const {
       provider,
-      contents,
       messages,
       model: modelName,
-      config,
+      parameters,
+      options,
+      tools,
+      systemInstruction,
       streaming,
       chatId,
       requestId,
@@ -395,15 +440,20 @@ io.on('connection', (socket) => {
       // Check if this is an agent model
       if (isAgentModel(normalizedModel)) {
         if (!providerKeys.gemini) throw new Error('Gemini API key is required for agent models')
-        if (!Array.isArray(contents)) throw new Error('contents must be an array')
+        if (!Array.isArray(messages)) throw new Error('messages must be an array')
         const agentBaseModel = process.env.AGENT_BASE_MODEL
         await runAgentSession({
           apiKey: providerKeys.gemini,
           baseModel: agentBaseModel,
           defaultSystemInstruction,
-          userSystemInstruction: config?.systemInstruction,
-          requestConfig: config || {},
-          contents,
+          userSystemInstruction: systemInstruction,
+          requestConfig: buildAgentRequestConfig({ parameters, tools }),
+          contents: messages.map((message) => ({
+            role: message.role,
+            parts: (message.parts || [])
+              .filter((part) => part?.type === 'text')
+              .map((part) => ({ text: part.text || '' })),
+          })),
           socket,
           chatId,
           requestId,
@@ -415,7 +465,8 @@ io.on('connection', (socket) => {
         const chunkPayload = {
           chatId,
           requestId,
-          parts: [{ text: '' }],
+          provider: 'virtual',
+          deltaText: '',
         }
         socket.emit('chunk', chunkPayload)
         socket.emit('end_generation', { ok: true, chatId, requestId, finishReason: 'stop' })
@@ -424,16 +475,26 @@ io.on('connection', (socket) => {
 
       const providerInstance = providerRegistry.get(providerId)
       if (!providerInstance) throw new Error(`${providerId || 'Requested'} provider is not configured`)
-      const history = messages ?? contents
-      if (!Array.isArray(history)) throw new Error('messages must be an array')
+      if (!Array.isArray(messages)) throw new Error('messages must be an array')
+      const request = {
+        provider: providerId,
+        chatId,
+        requestId,
+        model: modelName,
+        messages,
+        parameters: parameters || {},
+        options: options || {},
+        tools: tools || {},
+        systemInstruction: systemInstruction || '',
+      }
       if (streaming) {
-        const stream = providerInstance.generateStream(modelName, history, config || {}, chatId, requestId);
+        const stream = providerInstance.generateStream(request);
         for await (const chunk of stream) {
           socket.emit('chunk', chunk)
         }
         socket.emit('end_generation', { ok: true, chatId, requestId })
       } else {
-        const response = await providerInstance.generate(modelName, history, config || {}, chatId, requestId);
+        const response = await providerInstance.generate(request);
         socket.emit('chunk', response)
         socket.emit('end_generation', { ok: true, chatId, requestId })
       }
@@ -447,24 +508,51 @@ io.on('connection', (socket) => {
   })
 })
 
-// --- Stdin for reload ---
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
-});
+// --- Stdin commands ---
+function printCommandHelp() {
+  console.log('Commands: rs = reload config, rf = reload frontend, help = show commands.')
+}
 
-rl.on('line', (input) => {
-  if (input.trim() === 'rs') {
-    reloadConfig();
-    geminiProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
-    claudeProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
+function handleStdinCommand(input) {
+  const command = input.trim().toLowerCase()
+  if (!command) return
+
+  if (command === 'rs' || command === 'reload-config') {
+    applyReloadedConfig()
+    return
   }
-});
+
+  if (command === 'rf' || command === 'reload-frontend') {
+    requestFrontendReload()
+    return
+  }
+
+  if (command === 'help' || command === '?') {
+    printCommandHelp()
+    return
+  }
+
+  console.log(`Unknown command: ${command}`)
+  printCommandHelp()
+}
+
+if (process.stdin.isTTY) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  rl.on('line', handleStdinCommand)
+} else {
+  console.log('Stdin commands disabled because stdin is not a TTY.')
+}
 
 // --- Start server ---
 const PORT = process.env.PORT || 15101
 const HOST = process.env.HOST || '0.0.0.0'
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}${BASE_PATH}`)
-	console.log('Type "rs" and press Enter to reload config.');
+  if (process.stdin.isTTY) {
+    printCommandHelp()
+  }
 })

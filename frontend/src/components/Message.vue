@@ -432,8 +432,6 @@ const isExpired = (attachment) => {
   if (!attachment.expirationTime) return false
   return new Date(attachment.expirationTime) < new Date()
 }
-
-
 </script>
 
 <style scoped>
