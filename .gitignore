@@ -1,8 +1,8 @@
 # Specific files to ignore
-GEMINI.md
-CLAUDE.md
-AGENTS.md
-.codex
+/GEMINI.md
+/CLAUDE.md
+/AGENTS.md
+/.codex
 
 # Documents
 /api-tests
