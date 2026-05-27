@@ -1,8 +1,4 @@
 # Specific files to ignore
-/GEMINI.md
-/CLAUDE.md
-/AGENTS.md
-/.codex
 
 # Documents
 /api-tests
@@ -39,6 +35,7 @@ yarn-error.log*
 .vscode
 .idea
 .claude
+.codex
 
 # Windows alternate data streams
 *:Zone.Identifier
