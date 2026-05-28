@@ -11,9 +11,9 @@ import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { ClaudeProvider } from './providers/claude.js'
 import { createProviderRegistry } from './providers/registry.js'
-import { buildGeminiTools } from './providers/geminiMapper.js'
-import { runAgentSession } from './agent/runner.js'
+import { createSpecialRegistry } from './specialModels.js'
 import { makeResolveFirstExisting } from './utils.js'
+import { normalizeSystemInstructionMode } from './systemInstruction.js'
 
 const normalizeBasePath = (raw) => {
   if (!raw || typeof raw !== 'string') return '/chatbot'
@@ -22,6 +22,26 @@ const normalizeBasePath = (raw) => {
   return withLeading.replace(/\/+$/, '') || '/chatbot'
 }
 const escapeForRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const parseByteSize = (value, fallback) => {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  const match = value
+    .trim()
+    .toLowerCase()
+    .match(/^(\d+(?:\.\d+)?)\s*(b|kb|kib|mb|mib|gb|gib)?$/)
+  if (!match) return fallback
+  const amount = Number(match[1])
+  if (!Number.isFinite(amount) || amount <= 0) return fallback
+  const multipliers = {
+    b: 1,
+    kb: 1024,
+    kib: 1024,
+    mb: 1024 ** 2,
+    mib: 1024 ** 2,
+    gb: 1024 ** 3,
+    gib: 1024 ** 3,
+  }
+  return Math.floor(amount * multipliers[match[2] || 'b'])
+}
 
 // --- Path Helpers ---
 const runtimeFilename = fileURLToPath(import.meta.url)
@@ -53,22 +73,36 @@ if (envPath) {
 const BASE_PATH = normalizeBasePath(process.env.BASE_PATH)
 const API_PREFIX = `${BASE_PATH}/api`
 const SOCKET_PATH = `${BASE_PATH}/socket.io`
+const MAX_UPLOAD_FILE_SIZE = parseByteSize(
+  process.env.MAX_UPLOAD_FILE_SIZE,
+  10 * 1024 * 1024
+)
 
 // --- Config Loading ---
 let defaultSystemInstruction;
+let systemInstructionMode;
 
 function reloadConfig() {
   defaultSystemInstruction = process.env.DEFAULT_SYSTEM_INSTRUCTION ?? (() => {
     const candidate = resolveFirstExisting('system_instruction.txt', 'file')
     return candidate ? fs.readFileSync(candidate, 'utf-8') : undefined
   })()
+  systemInstructionMode = normalizeSystemInstructionMode(
+    process.env.SYSTEM_INSTRUCTION_MODE
+  )
   console.log('Config reloaded.')
 }
 
 function applyReloadedConfig() {
   reloadConfig()
-  geminiProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
-  claudeProvider?.setDefaultSystemInstruction(defaultSystemInstruction)
+  geminiProvider?.setDefaultSystemInstruction(
+    defaultSystemInstruction,
+    systemInstructionMode
+  )
+  claudeProvider?.setDefaultSystemInstruction(
+    defaultSystemInstruction,
+    systemInstructionMode
+  )
 }
 
 // --- Init ---
@@ -204,36 +238,76 @@ const connectionInfo = {}
 const geminiCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
 const claudeCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'claude.json'), 'file')
 const geminiProvider = providerKeys.gemini
-  ? new GeminiProvider(providerKeys.gemini, defaultSystemInstruction, { capabilitiesPath: geminiCapabilitiesPath })
+  ? new GeminiProvider(providerKeys.gemini, defaultSystemInstruction, {
+      capabilitiesPath: geminiCapabilitiesPath,
+      systemInstructionMode,
+    })
   : null
 const claudeProvider = providerKeys.claude
-  ? new ClaudeProvider(providerKeys.claude, defaultSystemInstruction, { capabilitiesPath: claudeCapabilitiesPath })
+  ? new ClaudeProvider(providerKeys.claude, defaultSystemInstruction, {
+      capabilitiesPath: claudeCapabilitiesPath,
+      systemInstructionMode,
+    })
   : null
 const providerRegistry = createProviderRegistry([
-  { id: 'gemini', label: 'Google Gemini', provider: geminiProvider },
-  { id: 'claude', label: 'Anthropic Claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
+  { id: 'gemini', provider: geminiProvider },
+  { id: 'claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
 ])
 
-const DUMMY_MODEL_NAME = 'dummy'
-
-// Agent model definitions: virtual name -> actual base model mapping
-const AGENT_MODELS = {
-  'agent-deep-research': true,
-}
-
-// Helper to check if a model name is an agent model
-const isAgentModel = (modelName) => modelName in AGENT_MODELS
+const specialRegistry = createSpecialRegistry({ providerKeys })
 
 // Ensure uploads dir exists for Multer temp files
 const uploadsDir = path.resolve(runtimeDirname, 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
-const upload = multer({ dest: uploadsDir })
+const upload = multer({
+  dest: uploadsDir,
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE },
+})
 
 // --- Helpers ---
 const normalizeModelName = (name) => (name || '').replace(/^models\//, '')
 const resolveProviderId = (modelName, hint) =>
   providerRegistry.resolveProviderId(modelName, hint) || 'gemini'
+
+function isMimeAllowedByPolicy(mimeType, allowedMimes) {
+  if (!allowedMimes) return true
+  const list = Array.isArray(allowedMimes) ? allowedMimes : []
+  if (list.includes(mimeType)) return true
+  return list.some(
+    (pattern) =>
+      typeof pattern === 'string' &&
+      pattern.endsWith('/*') &&
+      mimeType.startsWith(pattern.slice(0, -1))
+  )
+}
+
+function cleanupUploadedFile(file) {
+  try {
+    if (file?.path) fs.unlinkSync(file.path)
+  } catch {}
+}
+
+function handleUploadMiddleware(req, res, next) {
+  upload.single('file')(req, res, (error) => {
+    if (!error) {
+      next()
+      return
+    }
+    cleanupUploadedFile(req.file)
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({
+        error: 'File too large',
+        message: `Attachments must be smaller than ${MAX_UPLOAD_FILE_SIZE} bytes.`,
+      })
+      return
+    }
+    res.status(400).json({
+      error: 'Upload failed',
+      message: error?.message || 'Upload failed.',
+    })
+  })
+}
 const filterModelNames = (names = []) => {
   const list = Array.isArray(names) ? names : []
   if (!modelFilterKeywords.length) return list
@@ -255,26 +329,6 @@ const requestFrontendReload = () => {
   })
   console.log(`Frontend reload requested for ${getConnectedClientCount()} client(s).`)
 }
-const buildAgentRequestConfig = ({ parameters = {}, tools = {} }) => {
-  const config = { ...parameters }
-  const geminiTools = buildGeminiTools(tools)
-  if (geminiTools.length) config.tools = geminiTools
-  if (
-    parameters.thinkingBudget !== undefined ||
-    parameters.thinkingLevel !== undefined
-  ) {
-    config.thinkingConfig = {}
-    if (parameters.thinkingBudget !== undefined) {
-      config.thinkingConfig.thinkingBudget = parameters.thinkingBudget
-      delete config.thinkingBudget
-    }
-    if (parameters.thinkingLevel !== undefined) {
-      config.thinkingConfig.thinkingLevel = parameters.thinkingLevel
-      delete config.thinkingLevel
-    }
-  }
-  return config
-}
 
 // --- HTTP API ---
 const apiRouter = express.Router()
@@ -286,14 +340,7 @@ app.get(`${BASE_PATH}/healthz`, (_req, res) => res.json({ ok: true }))
 apiRouter.get('/models', async (_req, res) => {
   try {
     const groups = [
-      {
-        provider: 'virtual',
-        label: 'Special',
-        models: [
-          DUMMY_MODEL_NAME,
-          ...(geminiProvider ? Object.keys(AGENT_MODELS) : []),
-        ],
-      },
+      { provider: 'virtual', label: specialRegistry.label, models: specialRegistry.list() },
     ]
 
     for (const group of providerRegistry.groups()) {
@@ -329,29 +376,9 @@ apiRouter.get('/models/default', async (_req, res) => {
 apiRouter.get(/^\/models\/(.+)\/capabilities$/, async (req, res) => {
   try {
     const modelName = req.params[0]
-    if (normalizeModelName(modelName) === DUMMY_MODEL_NAME) {
-      return res.json({
-        provider: 'virtual',
-        model: DUMMY_MODEL_NAME,
-        label: 'Special',
-        features: { systemInstruction: false },
-        parameters: {},
-        options: {},
-        tools: {},
-        attachments: { enabled: false },
-      })
-    }
-    if (isAgentModel(normalizeModelName(modelName))) {
-      return res.json({
-        provider: 'virtual',
-        model: normalizeModelName(modelName),
-        label: 'Special',
-        features: { systemInstruction: true },
-        parameters: {},
-        options: {},
-        tools: {},
-        attachments: { enabled: false },
-      })
+    const normalized = normalizeModelName(modelName)
+    if (specialRegistry.isSpecial(normalized)) {
+      return res.json(specialRegistry.capabilities(normalized))
     }
 
     const providerId = resolveProviderId(modelName, req.query.provider)
@@ -369,17 +396,62 @@ apiRouter.get(/^\/models\/(.+)\/capabilities$/, async (req, res) => {
 })
 
 // Upload file via Files API
-apiRouter.post('/files/upload', upload.single('file'), async (req, res) => {
+apiRouter.post('/files/upload', handleUploadMiddleware, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.', message: 'No file uploaded.' })
-  if (!geminiProvider) return res.status(503).json({ error: 'Gemini provider unavailable', message: 'Gemini provider unavailable.' })
 
   try {
-    const file = await geminiProvider.uploadFile(req.file.path, req.file.mimetype, req.file.originalname);
-    try { fs.unlinkSync(req.file.path) } catch {}
+    const modelName = normalizeModelName(req.query.model)
+    if (!modelName) {
+      cleanupUploadedFile(req.file)
+      return res.status(400).json({
+        error: 'Model required',
+        message: 'Model is required for file upload.',
+      })
+    }
+    const providerId = resolveProviderId(modelName, req.query.provider)
+    const providerInstance = providerRegistry.get(providerId)
+    if (!providerInstance) {
+      cleanupUploadedFile(req.file)
+      return res.status(404).json({
+        error: 'Provider not available',
+        message: 'Provider not available for file upload.',
+        provider: providerId,
+        model: modelName,
+      })
+    }
+    if (typeof providerInstance.uploadFile !== 'function') {
+      cleanupUploadedFile(req.file)
+      return res.status(400).json({
+        error: 'File upload unsupported',
+        message: 'File upload is not supported for this model.',
+        provider: providerId,
+        model: modelName,
+      })
+    }
+    const capabilities =
+      typeof providerInstance.getModelCapabilities === 'function'
+        ? await providerInstance.getModelCapabilities(modelName)
+        : null
+    const attachmentPolicy = capabilities?.attachments || {}
+    if (
+      attachmentPolicy.enabled !== true ||
+      attachmentPolicy.allowRemoteUpload !== true ||
+      !isMimeAllowedByPolicy(req.file.mimetype, attachmentPolicy.allowedMimes)
+    ) {
+      cleanupUploadedFile(req.file)
+      return res.status(400).json({
+        error: 'File upload unsupported',
+        message: 'File upload is not supported for this model or file type.',
+        provider: providerId,
+        model: modelName,
+      })
+    }
+    const file = await providerInstance.uploadFile(req.file.path, req.file.mimetype, req.file.originalname);
+    cleanupUploadedFile(req.file)
     res.json(file)
   } catch (error) {
     console.error('upload error:', error?.status, error?.message)
-    try { if (req.file?.path) fs.unlinkSync(req.file.path) } catch {}
+    cleanupUploadedFile(req.file)
     const status = numberOr(error?.status, 500)
     res.status(status).json({ error: 'Failed to process file', message: error?.message })
   }
@@ -416,7 +488,6 @@ io.on('connection', (socket) => {
       messages,
       model: modelName,
       parameters,
-      options,
       tools,
       systemInstruction,
       streaming,
@@ -437,39 +508,11 @@ io.on('connection', (socket) => {
       const normalizedModel = normalizeModelName(modelName)
       const providerId = resolveProviderId(normalizedModel, provider)
 
-      // Check if this is an agent model
-      if (isAgentModel(normalizedModel)) {
-        if (!providerKeys.gemini) throw new Error('Gemini API key is required for agent models')
-        if (!Array.isArray(messages)) throw new Error('messages must be an array')
-        const agentBaseModel = process.env.AGENT_BASE_MODEL
-        await runAgentSession({
-          apiKey: providerKeys.gemini,
-          baseModel: agentBaseModel,
+      if (specialRegistry.isSpecial(normalizedModel)) {
+        await specialRegistry.handle(normalizedModel, socket, data, {
           defaultSystemInstruction,
-          userSystemInstruction: systemInstruction,
-          requestConfig: buildAgentRequestConfig({ parameters, tools }),
-          contents: messages.map((message) => ({
-            role: message.role,
-            parts: (message.parts || [])
-              .filter((part) => part?.type === 'text')
-              .map((part) => ({ text: part.text || '' })),
-          })),
-          socket,
-          chatId,
-          requestId,
+          systemInstructionMode,
         })
-        return
-      }
-
-      if (normalizedModel === DUMMY_MODEL_NAME) {
-        const chunkPayload = {
-          chatId,
-          requestId,
-          provider: 'virtual',
-          deltaText: '',
-        }
-        socket.emit('chunk', chunkPayload)
-        socket.emit('end_generation', { ok: true, chatId, requestId, finishReason: 'stop' })
         return
       }
 
@@ -483,7 +526,6 @@ io.on('connection', (socket) => {
         model: modelName,
         messages,
         parameters: parameters || {},
-        options: options || {},
         tools: tools || {},
         systemInstruction: systemInstruction || '',
       }

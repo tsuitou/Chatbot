@@ -3,11 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { makeResolveFirstExisting } from '../utils.js'
+import { buildGeminiTools } from '../providers/geminiMapper.js'
 import { geminiEvent, textEvent } from '../providers/events.js'
-import { supportsServerSideToolInvocations } from '../providers/shared.js'
+import { resolveSystemInstruction } from '../systemInstruction.js'
 
 const DEFAULT_RETENTION_DAYS = 55
 const AGENT_TOOLS_FILE = 'agent-tools.json'
+const AGENT_THINKING_LEVEL = 'high'
+const AGENT_TOOLS = { urlContext: true, grounding: true, codeExecution: true }
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
@@ -306,7 +309,6 @@ function buildSessionBlock({
     '',
     '',
     '---',
-    'Deep Research セッション\n\n',
     `session_id: ${sessionId}\n\n`,
     `agent: ${agent}\n\n`,
     `mode: ${action}\n\n`,
@@ -347,11 +349,16 @@ function normalizeThoughtDelta(delta) {
 function buildMergedSystemInstruction({
   defaultSystemInstruction,
   userSystemInstruction,
+  systemInstructionMode,
   agentTools,
 }) {
+  const resolvedSystemInstruction = resolveSystemInstruction({
+    defaultSystemInstruction,
+    userSystemInstruction,
+    mode: systemInstructionMode,
+  })
   return [
-    userSystemInstruction || null,
-    defaultSystemInstruction || null,
+    resolvedSystemInstruction || null,
     [
       'You are an agent that can use Gemini Deep Research when appropriate.',
       'Default to answering directly. Use Deep Research only when the user explicitly asks for research, investigation, current information, source collection, broad comparison, or continuation/execution of an existing Deep Research session.',
@@ -444,28 +451,16 @@ function textFromToolArgs(action, args, fallback) {
   return String(args.instruction || fallback || '').trim()
 }
 
-function buildAgentModelConfig({ model, systemInstruction, requestConfig, agentTools }) {
+function buildAgentModelConfig({ systemInstruction, agentTools }) {
+  const tools = [...buildGeminiTools(AGENT_TOOLS), ...buildDeepResearchToolConfig(agentTools)]
   const config = {
-    ...(requestConfig || {}),
     systemInstruction,
+    thinkingConfig: { thinkingLevel: AGENT_THINKING_LEVEL, includeThoughts: true },
   }
-  delete config.model
-  delete config.options
-  config.thinkingConfig = {
-    ...(config.thinkingConfig || {}),
-    includeThoughts: true,
+  if (tools.length) {
+    config.tools = tools
+    config.toolConfig = { includeServerSideToolInvocations: true }
   }
-  if (supportsServerSideToolInvocations(model)) {
-    config.toolConfig = {
-      ...(config.toolConfig || {}),
-      includeServerSideToolInvocations: true,
-    }
-  }
-  const requestTools = Array.isArray(config.tools) ? config.tools.filter(Boolean) : []
-  const deepResearchTools = buildDeepResearchToolConfig(agentTools)
-  const tools = [...requestTools, ...deepResearchTools]
-  if (tools.length) config.tools = tools
-  else delete config.tools
   return config
 }
 
@@ -477,15 +472,9 @@ async function streamAgentModelTurn({
   chatId,
   requestId,
   systemInstruction,
-  requestConfig,
   agentTools,
 }) {
-  const config = buildAgentModelConfig({
-    model,
-    systemInstruction,
-    requestConfig,
-    agentTools,
-  })
+  const config = buildAgentModelConfig({ systemInstruction, agentTools })
 
   const stream = await ai.models.generateContentStream({
     model,
@@ -656,36 +645,33 @@ export async function runDeepResearchAgentSession({
   apiKey,
   baseModel,
   defaultSystemInstruction,
+  systemInstructionMode,
   userSystemInstruction,
   contents,
   socket,
   chatId,
   requestId,
-  requestConfig = {},
   ai: injectedAi,
 }) {
+  if (!baseModel) throw new Error('Agent base model is not configured')
   const ai = injectedAi || new GoogleGenAI({ apiKey })
-  const model = baseModel || process.env.AGENT_BASE_MODEL
-  if (!model) {
-    throw new Error('Agent base model is not configured (set AGENT_BASE_MODEL)')
-  }
   const agentTools = resolveAgentTools()
   const systemInstruction = buildMergedSystemInstruction({
     defaultSystemInstruction,
     userSystemInstruction,
+    systemInstructionMode,
     agentTools,
   })
 
   const userText = extractUserText(contents)
   const agentTurn = await streamAgentModelTurn({
     ai,
-    model,
+    model: baseModel,
     contents,
     socket,
     chatId,
     requestId,
     systemInstruction,
-    requestConfig,
     agentTools,
   })
   const functionCall = agentTurn.functionCall

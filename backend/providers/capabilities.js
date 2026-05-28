@@ -26,55 +26,44 @@ export function loadCapabilities(providerId, explicitPath, runtimeDirname) {
   return null
 }
 
+// Selects the most specific model entry whose `modelQuery` is a substring of
+// the model name. Specificity = explicit `priority` first, then longest query,
+// so authoring order in the JSON is irrelevant: `2.5-flash-lite` beats
+// `2.5-flash` by length, and `image` overrides its base family via priority.
 export function getEffectiveCapabilities(capabilities, modelName) {
   const models = Array.isArray(capabilities?.models) ? capabilities.models : []
-  const capModel = models.find((model) =>
-    String(modelName || '').includes(model.modelQuery)
-  )
-  const parameters = mergeSection(
-    capabilities?.defaults?.parameters,
-    capModel?.parameters
-  )
-  const features = mergeSection(
-    capabilities?.defaults?.features,
-    capModel?.features
-  )
-  const options = mergeSection(
-    capabilities?.defaults?.options,
-    capModel?.options
-  )
-  const tools = mergeSection(capabilities?.defaults?.tools, capModel?.tools)
-  const attachments = {
-    ...(capabilities?.defaults?.attachments || {}),
-    ...(capModel?.attachments || {}),
-  }
+  const name = String(modelName || '')
+  const capModel =
+    models
+      .filter((model) => model.modelQuery && name.includes(model.modelQuery))
+      .sort(
+        (a, b) =>
+          (b.priority ?? 0) - (a.priority ?? 0) ||
+          b.modelQuery.length - a.modelQuery.length
+      )[0] || null
 
   return {
     provider: capabilities?.provider,
     label: capabilities?.label,
-    parameters,
-    features,
-    options,
-    tools,
-    attachments,
+    parameters: deepMerge(capabilities?.defaults?.parameters, capModel?.parameters),
+    features: deepMerge(capabilities?.defaults?.features, capModel?.features),
+    tools: deepMerge(capabilities?.defaults?.tools, capModel?.tools),
+    attachments: deepMerge(capabilities?.defaults?.attachments, capModel?.attachments),
     model: capModel || null,
   }
 }
 
-function mergeSection(defaults = {}, overrides = {}) {
-  const result = { ...(defaults || {}) }
-  for (const [key, value] of Object.entries(overrides || {})) {
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function deepMerge(base = {}, override = {}) {
+  const result = { ...(base || {}) }
+  for (const [key, value] of Object.entries(override || {})) {
     if (value === null || value === undefined) {
       delete result[key]
-    } else if (
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      result[key] &&
-      typeof result[key] === 'object' &&
-      !Array.isArray(result[key])
-    ) {
-      result[key] = { ...result[key], ...value }
+    } else if (isPlainObject(value) && isPlainObject(result[key])) {
+      result[key] = deepMerge(result[key], value)
     } else {
       result[key] = value
     }
@@ -89,32 +78,31 @@ export function buildModelCapabilities(capabilities, modelName, seed = {}) {
     label: effective.label,
     model: modelName,
     features: effective.features,
-    parameters: buildConfigRanges(effective.parameters, seed),
-    options: effective.options,
+    parameters: buildParameterDisplay(effective.parameters, seed),
     tools: effective.tools,
     attachments: effective.attachments,
   }
 }
 
-export function buildConfigRanges(effectiveParams, seed = {}) {
-  const ranges = { ...seed }
+// Flattens each parameter's `ui` block (with nested `range`) into the flat
+// { type, label, min, max, step, options, specialValues, default } shape the
+// frontend renders. The `api` block is dropped — it is consumption-only.
+export function buildParameterDisplay(parameterDefs, seed = {}) {
+  const display = { ...seed }
 
-  for (const [key, def] of Object.entries(effectiveParams || {})) {
+  for (const [key, def] of Object.entries(parameterDefs || {})) {
     if (def === null || def === undefined) {
-      delete ranges[key]
+      delete display[key]
       continue
     }
-    if (def.range) ranges[key] = { ...(ranges[key] || {}), ...def.range }
-    if (def.options) ranges[key] = { ...(ranges[key] || {}), options: def.options }
-    if (def.specialValues) {
-      ranges[key] = { ...(ranges[key] || {}), specialValues: def.specialValues }
+    const { range, ...rest } = def.ui || {}
+    display[key] = {
+      ...(display[key] || {}),
+      ...rest,
+      ...(range || {}),
     }
-    if (def.type) ranges[key] = { ...(ranges[key] || {}), type: def.type }
-    if (def.label) ranges[key] = { ...(ranges[key] || {}), label: def.label }
-    if (def.default !== undefined) {
-      ranges[key] = { ...(ranges[key] || {}), default: def.default }
-    }
+    if (def.default !== undefined) display[key].default = def.default
   }
 
-  return ranges
+  return display
 }

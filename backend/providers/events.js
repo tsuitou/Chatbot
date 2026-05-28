@@ -62,20 +62,29 @@ export function eventFromParts({
   const attachments = []
   const thoughtSignatures = []
   const seenSignatures = new Set()
+  let inThinkingContext = true
 
   for (let idx = 0; idx < (parts || []).length; idx++) {
     const part = parts[idx]
     if (part?.text) {
-      if (part.thought) thoughtDelta += part.text
-      else deltaText += part.text
+      if (part.thought) {
+        thoughtDelta += part.text
+      } else {
+        deltaText += part.text
+        inThinkingContext = false
+      }
     }
     if (part?.executableCode) {
       const { language, code } = part.executableCode
-      deltaText += `\n\n\`\`\`${language}\n${code}\n\`\`\`\n`
+      const formatted = `\n\n\`\`\`${language}\n${code}\n\`\`\`\n`
+      if (inThinkingContext) thoughtDelta += formatted
+      else deltaText += formatted
     }
     if (part?.codeExecutionResult) {
       const output = part.codeExecutionResult.output ?? ''
-      deltaText += `\n\n\`\`\`bash\n${output}\n\`\`\`\n`
+      const formatted = `\n\n\`\`\`bash\n${output}\n\`\`\`\n`
+      if (inThinkingContext) thoughtDelta += formatted
+      else deltaText += formatted
     }
     if (part?.inlineData) {
       const { mimeType, data } = part.inlineData

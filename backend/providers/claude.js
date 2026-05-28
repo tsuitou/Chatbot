@@ -2,16 +2,44 @@ import Anthropic from '@anthropic-ai/sdk'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import {
-  buildConfigRanges,
   buildModelCapabilities,
   getEffectiveCapabilities,
   loadCapabilities,
 } from './capabilities.js'
+import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts } from './events.js'
-import { applyParameterMap, mergeText } from './request.js'
+import { mergeText } from './request.js'
+import {
+  normalizeSystemInstructionMode,
+  resolveSystemInstruction,
+} from '../systemInstruction.js'
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
+
+// Anthropic requires thinking.budget_tokens >= 1024 and max_tokens strictly
+// greater than the budget. CLAUDE_DEFAULT_MAX_TOKENS only applies when a model
+// definition omits maxOutputTokens (every listed model sets it).
+const CLAUDE_MIN_THINKING_BUDGET = 1024
+const CLAUDE_DEFAULT_MAX_TOKENS = 64000
+
+function claudeThinkingTransform({ config, value }) {
+  const budget = Number(value)
+  if (budget === -1) {
+    config.thinking = { type: 'adaptive' }
+    return
+  }
+  if (!Number.isFinite(budget) || budget < CLAUDE_MIN_THINKING_BUDGET) return
+
+  config.thinking = {
+    type: 'enabled',
+    budget_tokens: budget,
+  }
+  const currentMax = config.max_tokens || CLAUDE_DEFAULT_MAX_TOKENS
+  if (currentMax <= budget) {
+    config.max_tokens = budget + CLAUDE_MIN_THINKING_BUDGET
+  }
+}
 
 function normalizeClaudeUsage(u) {
   if (!u) return null
@@ -27,91 +55,34 @@ function normalizeClaudeUsage(u) {
 
 export class ClaudeProvider {
   constructor(apiKey, systemInstruction, options = {}) {
-    const { capabilitiesPath } = options
+    const { capabilitiesPath, systemInstructionMode } = options
     this.anthropic = new Anthropic({ apiKey })
     this.defaultSystemInstruction = systemInstruction
+    this.systemInstructionMode =
+      normalizeSystemInstructionMode(systemInstructionMode)
     this.capabilities = loadCapabilities('claude', capabilitiesPath, runtimeDirname)
+    this.label = this.capabilities?.label ?? 'Claude'
   }
 
-  setDefaultSystemInstruction(systemInstruction) {
+  setDefaultSystemInstruction(systemInstruction, mode = this.systemInstructionMode) {
     this.defaultSystemInstruction = systemInstruction
+    this.systemInstructionMode = normalizeSystemInstructionMode(mode)
   }
 
   _buildConfig(modelName, request) {
     const requestParameters = request?.parameters || {}
     const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
-    const ranges = buildConfigRanges(parameters)
+    const config = buildProviderConfig(parameters, requestParameters, {
+      claudeThinking: claudeThinkingTransform,
+    })
 
-    const config = {}
-    applyParameterMap(
-      config,
-      requestParameters,
-      this.capabilities?.api?.parameterMap
-    )
-
-    if (config.max_tokens === undefined || config.max_tokens === null) {
-      if (ranges.maxOutputTokens && ranges.maxOutputTokens.default !== undefined) {
-        config.max_tokens = ranges.maxOutputTokens.default
-      }
-    }
-
-    if (config.temperature === undefined || config.temperature === null) {
-      if (ranges.temperature && ranges.temperature.default !== undefined) {
-        config.temperature = ranges.temperature.default
-      }
-    }
-
-    if (config.top_p === undefined || config.top_p === null) {
-      if (ranges.topP && ranges.topP.default !== undefined) {
-        config.top_p = ranges.topP.default
-      }
-    }
-
-    if (config.top_k === undefined || config.top_k === null) {
-      if (ranges.topK && ranges.topK.default !== undefined) {
-        config.top_k = ranges.topK.default
-      }
-    }
-
-    const thinkingBudget = Number(requestParameters.thinkingBudget)
-    if (thinkingBudget === 0) {
-      config.thinking = { type: 'disabled' }
-    } else if (thinkingBudget === -1) {
-      config.thinking = { type: 'adaptive' }
-    } else if (Number.isFinite(thinkingBudget) && thinkingBudget >= 1024) {
-      config.thinking = {
-        type: 'enabled',
-        budget_tokens: thinkingBudget,
-      }
-      const currentMax = config.max_tokens || 64000
-      if (currentMax <= thinkingBudget) {
-        config.max_tokens = thinkingBudget + 1024
-      }
-    }
-
-    if (config.thinking === undefined || config.thinking === null) {
-      if (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined) {
-        const defaultBudget = ranges.thinkingBudget.default
-        if (defaultBudget === -1) {
-          config.thinking = { type: 'adaptive' }
-        } else if (defaultBudget >= 1024) {
-          config.thinking = {
-            type: 'enabled',
-            budget_tokens: defaultBudget
-          }
-          // Ensure max_tokens is strictly greater than budget_tokens
-          const currentMax = config.max_tokens || 64000
-          if (currentMax <= defaultBudget) {
-            config.max_tokens = defaultBudget + 1024
-          }
-        }
-      }
-    } else if (config.thinking && config.thinking.type === 'disabled') {
-      delete config.thinking
-    }
-
-    if (request?.systemInstruction || this.defaultSystemInstruction) {
-      config.system = request?.systemInstruction || this.defaultSystemInstruction
+    const systemInstruction = resolveSystemInstruction({
+      defaultSystemInstruction: this.defaultSystemInstruction,
+      userSystemInstruction: request?.systemInstruction,
+      mode: this.systemInstructionMode,
+    })
+    if (features?.systemInstruction !== false && systemInstruction) {
+      config.system = systemInstruction
     }
     return config
   }

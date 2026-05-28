@@ -1,14 +1,6 @@
 {
   "provider": "claude",
   "label": "Anthropic Claude",
-  "api": {
-    "parameterMap": {
-      "temperature": "temperature",
-      "topP": "top_p",
-      "topK": "top_k",
-      "maxOutputTokens": "max_tokens"
-    }
-  },
   "defaults": {
     "features": {
       "systemInstruction": true
@@ -29,20 +21,29 @@
     },
     "parameters": {
       "temperature": {
-        "type": "number",
-        "label": "Temperature",
-        "range": { "min": 0, "max": 1, "step": 0.05 }
+        "ui": {
+          "type": "number",
+          "label": "Temperature",
+          "range": { "min": 0, "max": 1, "step": 0.05 }
+        },
+        "api": { "path": "temperature" }
       },
       "topP": {
-        "type": "number",
-        "label": "Top P",
-        "range": { "min": 0, "max": 1, "step": 0.01 }
+        "ui": {
+          "type": "number",
+          "label": "Top P",
+          "range": { "min": 0, "max": 1, "step": 0.01 }
+        },
+        "api": { "path": "top_p" }
       },
       "maxOutputTokens": {
-        "type": "integer",
-        "label": "Max Output Tokens",
-        "range": { "min": 1, "max": 16000 },
-        "default": 16000
+        "default": 16000,
+        "ui": {
+          "type": "integer",
+          "label": "Max Output Tokens",
+          "range": { "min": 1, "max": 16000 }
+        },
+        "api": { "path": "max_tokens" }
       }
     }
   },
@@ -56,15 +57,21 @@
       "parameters": {
         "temperature": null,
         "topP": null,
-        "maxOutputTokens": { "range": { "min": 1, "max": 128000 }, "default": 128000 },
+        "maxOutputTokens": {
+          "default": 128000,
+          "ui": { "range": { "min": 1, "max": 128000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Mode",
           "default": -1,
-          "specialValues": [
-            { "label": "Disabled", "value": 0 },
-            { "label": "Adaptive", "value": -1 }
-          ]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Mode",
+            "specialValues": [
+              { "label": "Disabled", "value": 0 },
+              { "label": "Adaptive", "value": -1 }
+            ]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -75,16 +82,22 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "maxOutputTokens": {
+          "default": 64000,
+          "ui": { "range": { "min": 1, "max": 64000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 32000,
-          "range": { "min": 1024, "max": 32000, "step": 256 },
-          "specialValues": [
-            { "label": "Disabled", "value": 0 },
-            { "label": "Adaptive", "value": -1 }
-          ]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 32000, "step": 256 },
+            "specialValues": [
+              { "label": "Disabled", "value": 0 },
+              { "label": "Adaptive", "value": -1 }
+            ]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -95,13 +108,19 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "maxOutputTokens": {
+          "default": 64000,
+          "ui": { "range": { "min": 1, "max": 64000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 32000,
-          "range": { "min": 1024, "max": 32000, "step": 256 },
-          "specialValues": [{ "label": "Disabled", "value": 0 }]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 32000, "step": 256 },
+            "specialValues": [{ "label": "Disabled", "value": 0 }]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -112,16 +131,22 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 128000 }, "default": 128000 },
+        "maxOutputTokens": {
+          "default": 128000,
+          "ui": { "range": { "min": 1, "max": 128000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 64000,
-          "range": { "min": 1024, "max": 64000, "step": 256 },
-          "specialValues": [
-            { "label": "Disabled", "value": 0 },
-            { "label": "Adaptive", "value": -1 }
-          ]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 64000, "step": 256 },
+            "specialValues": [
+              { "label": "Disabled", "value": 0 },
+              { "label": "Adaptive", "value": -1 }
+            ]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -131,13 +156,19 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "maxOutputTokens": {
+          "default": 64000,
+          "ui": { "range": { "min": 1, "max": 64000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 32000,
-          "range": { "min": 1024, "max": 32000, "step": 256 },
-          "specialValues": [{ "label": "Disabled", "value": 0 }]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 32000, "step": 256 },
+            "specialValues": [{ "label": "Disabled", "value": 0 }]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -147,13 +178,19 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 32000 }, "default": 32000 },
+        "maxOutputTokens": {
+          "default": 32000,
+          "ui": { "range": { "min": 1, "max": 32000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 16000,
-          "range": { "min": 1024, "max": 16000, "step": 256 },
-          "specialValues": [{ "label": "Disabled", "value": 0 }]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 16000, "step": 256 },
+            "specialValues": [{ "label": "Disabled", "value": 0 }]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
@@ -163,20 +200,29 @@
         "extendedThinking": true
       },
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 64000 }, "default": 64000 },
+        "maxOutputTokens": {
+          "default": 64000,
+          "ui": { "range": { "min": 1, "max": 64000 } }
+        },
         "thinkingBudget": {
-          "type": "integer",
-          "label": "Thinking Budget",
           "default": 32000,
-          "range": { "min": 1024, "max": 32000, "step": 256 },
-          "specialValues": [{ "label": "Disabled", "value": 0 }]
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Budget",
+            "range": { "min": 1024, "max": 32000, "step": 256 },
+            "specialValues": [{ "label": "Disabled", "value": 0 }]
+          },
+          "api": { "transform": "claudeThinking" }
         }
       }
     },
     {
       "modelQuery": "claude-3-5-haiku",
       "parameters": {
-        "maxOutputTokens": { "range": { "min": 1, "max": 8192 }, "default": 8192 }
+        "maxOutputTokens": {
+          "default": 8192,
+          "ui": { "range": { "min": 1, "max": 8192 } }
+        }
       }
     }
   ]

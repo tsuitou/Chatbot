@@ -2,114 +2,65 @@ import { GoogleGenAI } from '@google/genai'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import {
-  buildConfigRanges,
   buildModelCapabilities,
   getEffectiveCapabilities,
   loadCapabilities,
 } from './capabilities.js'
+import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts, geminiEvent } from './events.js'
 import { buildGeminiContents, buildGeminiTools } from './geminiMapper.js'
-import { applyParameterMap } from './request.js'
 import { normalizeGeminiUsage, supportsServerSideToolInvocations } from './shared.js'
+import {
+  normalizeSystemInstructionMode,
+  resolveSystemInstruction,
+} from '../systemInstruction.js'
 
 const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
 
 export class GeminiProvider {
   constructor(apiKey, systemInstruction, options = {}) {
-    const { capabilitiesPath } = options
+    const { capabilitiesPath, systemInstructionMode } = options
     this.genAI = new GoogleGenAI({ apiKey })
     this.defaultSystemInstruction = systemInstruction
+    this.systemInstructionMode =
+      normalizeSystemInstructionMode(systemInstructionMode)
     this.capabilities = loadCapabilities('gemini', capabilitiesPath, runtimeDirname);
+    this.label = this.capabilities?.label ?? 'Gemini'
+    this.modelDetailsCache = new Map()
   }
 
-  setDefaultSystemInstruction(systemInstruction) {
+  setDefaultSystemInstruction(systemInstruction, mode = this.systemInstructionMode) {
     this.defaultSystemInstruction = systemInstruction
+    this.systemInstructionMode = normalizeSystemInstructionMode(mode)
   }
 
   _buildConfig(modelName, request) {
     const requestParameters = request?.parameters || {}
-    const options = request?.options || {}
     const tools = request?.tools || {}
-    const finalConfig = {}
     const { parameters: effectiveParameters, features, tools: effectiveTools } = getEffectiveCapabilities(this.capabilities, modelName)
-    const ranges = buildConfigRanges(effectiveParameters)
+    const finalConfig = buildProviderConfig(effectiveParameters, requestParameters)
 
-    applyParameterMap(
-      finalConfig,
-      requestParameters,
-      this.capabilities?.api?.parameterMap
-    )
-
-    if (features?.systemInstruction !== false) {
-      finalConfig.systemInstruction =
-        request?.systemInstruction || this.defaultSystemInstruction
+    const systemInstruction = resolveSystemInstruction({
+      defaultSystemInstruction: this.defaultSystemInstruction,
+      userSystemInstruction: request?.systemInstruction,
+      mode: this.systemInstructionMode,
+    })
+    if (features?.systemInstruction !== false && systemInstruction) {
+      finalConfig.systemInstruction = systemInstruction
     }
 
     finalConfig.tools = buildGeminiTools(tools, effectiveTools)
     if (!finalConfig.tools.length) delete finalConfig.tools
 
-    if (supportsServerSideToolInvocations(modelName)) {
+    if (
+      finalConfig.tools?.length &&
+      supportsServerSideToolInvocations(features)
+    ) {
       finalConfig.toolConfig = {
         ...(finalConfig.toolConfig || {}),
         includeServerSideToolInvocations: true,
       }
-    }
-
-    if (finalConfig.temperature === undefined || finalConfig.temperature === null) {
-      if (ranges.temperature && ranges.temperature.default !== undefined) {
-        finalConfig.temperature = ranges.temperature.default
-      }
-    }
-
-    if (finalConfig.topP === undefined || finalConfig.topP === null) {
-      if (ranges.topP && ranges.topP.default !== undefined) {
-        finalConfig.topP = ranges.topP.default
-      }
-    }
-
-    if (finalConfig.topK === undefined || finalConfig.topK === null) {
-      if (ranges.topK && ranges.topK.default !== undefined) {
-        finalConfig.topK = ranges.topK.default
-      }
-    }
-
-    if (finalConfig.maxOutputTokens === undefined || finalConfig.maxOutputTokens === null) {
-      if (ranges.maxOutputTokens && ranges.maxOutputTokens.default !== undefined) {
-        finalConfig.maxOutputTokens = ranges.maxOutputTokens.default
-      }
-    }
-
-    if (
-      requestParameters.thinkingBudget !== undefined ||
-      requestParameters.thinkingLevel !== undefined ||
-      (ranges.thinkingBudget && ranges.thinkingBudget.default !== undefined)
-    ) {
-      if (!finalConfig.thinkingConfig) {
-        finalConfig.thinkingConfig = {}
-      }
-      if (requestParameters.thinkingBudget !== undefined) {
-        finalConfig.thinkingConfig.thinkingBudget = requestParameters.thinkingBudget
-      } else if (finalConfig.thinkingConfig.thinkingBudget === undefined || finalConfig.thinkingConfig.thinkingBudget === null) {
-        finalConfig.thinkingConfig.thinkingBudget = ranges.thinkingBudget.default
-      }
-      if (requestParameters.thinkingLevel !== undefined) {
-        finalConfig.thinkingConfig.thinkingLevel = requestParameters.thinkingLevel
-      }
-    }
-
-    const imageConfigParams = Array.isArray(features?.imageConfigParams)
-      ? features.imageConfigParams
-      : []
-    for (const key of imageConfigParams) {
-      if (requestParameters[key] === undefined) continue
-      finalConfig.imageConfig = finalConfig.imageConfig || {}
-      finalConfig.imageConfig[key] = requestParameters[key]
-    }
-
-    if (options.includeThoughts != null) {
-      finalConfig.thinkingConfig = finalConfig.thinkingConfig || {}
-      finalConfig.thinkingConfig.includeThoughts = !!options.includeThoughts
     }
 
     return finalConfig;
@@ -178,15 +129,24 @@ export class GeminiProvider {
   }
   
   async getModelCapabilities(modelName) {
-     let ranges = {};
+     const ranges = {};
+     const max = await this._resolveOutputTokenLimit(modelName)
+     if (max) {
+         ranges.maxOutputTokens = { type: 'integer', label: 'Max Output Tokens', min: 1, max };
+     }
+     return buildModelCapabilities(this.capabilities, modelName, ranges)
+  }
+
+  async _resolveOutputTokenLimit(modelName) {
+     if (this.modelDetailsCache.has(modelName)) return this.modelDetailsCache.get(modelName)
+     let max = null
      try {
          const details = await this.genAI.models.get({ model: modelName });
-         if (details?.outputTokenLimit) {
-             ranges.maxOutputTokens = { type: 'integer', label: 'Max Output Tokens', min: 1, max: Number(details.outputTokenLimit) };
-         }
+         if (details?.outputTokenLimit) max = Number(details.outputTokenLimit)
      } catch (e) {
          console.warn(`Failed to fetch model details for ${modelName}:`, e.message);
      }
-     return buildModelCapabilities(this.capabilities, modelName, ranges)
+     this.modelDetailsCache.set(modelName, max)
+     return max
   }
 }

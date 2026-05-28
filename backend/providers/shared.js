@@ -1,6 +1,5 @@
-export function supportsServerSideToolInvocations(modelName) {
-  const normalized = String(modelName || '').toLowerCase()
-  return normalized.includes('gemini-3') || normalized.includes('gemini-4')
+export function supportsServerSideToolInvocations(features = {}) {
+  return features?.includeServerSideToolInvocations === true
 }
 
 export function normalizeGeminiUsage(u) {

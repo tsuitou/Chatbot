@@ -14,7 +14,7 @@ export function createProviderRegistry(providers = []) {
     groups() {
       return entries.map((entry) => ({
         provider: entry.id,
-        label: entry.label,
+        label: entry.provider.label ?? entry.label,
         models: entry.provider.listModels(),
       }))
     },
