@@ -39,7 +39,12 @@
             :key="group.provider"
             :label="group.label"
           >
-            <option v-for="model in group.models" :key="model" :value="model">
+            <option
+              v-for="model in group.models"
+              :key="model"
+              :value="model"
+              :data-provider-id="group.provider"
+            >
               {{ model }}
             </option>
           </optgroup>
@@ -159,7 +164,8 @@ const streamingEnabled = computed({
 // --- Methods ---
 const onModelChange = async (event) => {
   const model = event.target.value
-  await store.selectModel(model)
+  const providerId = event.target.selectedOptions?.[0]?.dataset?.providerId
+  await store.selectModel(model, providerId || null)
 }
 const prepareNewChat = () => store.prepareNewChat()
 const loadChat = (chatId) => store.loadChat(chatId)

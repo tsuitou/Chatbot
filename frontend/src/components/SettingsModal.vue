@@ -21,8 +21,9 @@
             >
             <select
               id="model-select-modal"
-              v-model="selectedModel"
+              :value="selectedModel"
               class="select-input"
+              @change="onModelChange"
             >
               <optgroup
                 v-for="group in availableModels"
@@ -33,6 +34,7 @@
                   v-for="model in group.models"
                   :key="model"
                   :value="model"
+                  :data-provider-id="group.provider"
                 >
                   {{ model }}
                 </option>
@@ -47,8 +49,13 @@
                 v-for="param in dynamicParameters"
                 :key="param.key"
                 class="form-field"
+                :class="{ 'form-field--checkbox': param.type === 'boolean' }"
               >
-                <label class="form-label" :for="param.key">
+                <label
+                  v-if="param.type !== 'boolean'"
+                  class="form-label"
+                  :for="param.key"
+                >
                   {{ param.label || param.key }}
                   <span v-if="param.hint" class="form-hint"
                     >({{ param.hint }})</span
@@ -83,6 +90,20 @@
                   :placeholder="param.label"
                 />
 
+                <!-- Boolean Checkbox -->
+                <label
+                  v-else-if="param.type === 'boolean'"
+                  class="checkbox-field"
+                  :for="param.key"
+                >
+                  <input
+                    :id="param.key"
+                    v-model="currentSettings.parameters[param.key]"
+                    type="checkbox"
+                  />
+                  <span>{{ param.label || param.key }}</span>
+                </label>
+
                 <!-- Enum Select -->
                 <select
                   v-else-if="param.type === 'enum'"
@@ -109,15 +130,6 @@
                 </select>
               </div>
             </div>
-
-            <!-- Show 'includeThoughts' only when capabilities explicitly enable it -->
-            <label v-if="supportsIncludeThoughts" class="form-option">
-              <input
-                v-model="currentSettings.options.includeThoughts"
-                type="checkbox"
-              />
-              Include Thoughts
-            </label>
           </fieldset>
 
           <fieldset v-if="supportsSystemInstruction" class="form-section">
@@ -154,12 +166,14 @@ import {
   cloneSettings,
   serializeSettings,
 } from '../services/modelConfig'
+import { normalizeDynamicParameters } from '../services/modelCapabilities'
 const emit = defineEmits(['close'])
 const store = useChatStore()
 
 const availableModels = computed(() => store.availableModels)
 const allModelSettings = ref({})
 const selectedModel = ref('')
+const selectedProviderId = ref(null)
 const modelCapabilities = ref({})
 const currentSettings = ref(createEmptySettings())
 
@@ -172,11 +186,9 @@ const handleGlobalMouseUp = () => {
   shouldCancelOverlayClose.value = false
 }
 
-const allModels = computed(() => store.allAvailableModels)
-
 const ensureProvider = (settings, modelName = selectedModel.value) => {
   const next = cloneSettings(settings)
-  next.providerId = modelName ? store.findProviderForModel(modelName) : null
+  next.providerId = modelName ? selectedProviderId.value : null
   return next
 }
 
@@ -207,7 +219,10 @@ const fetchCapabilitiesForModel = async (modelName) => {
     return
   }
   try {
-    modelCapabilities.value = await store.ensureModelCapabilities(modelName)
+    modelCapabilities.value = await store.ensureModelCapabilities(
+      modelName,
+      selectedProviderId.value
+    )
   } catch (error) {
     console.error('Failed to fetch model capabilities:', error)
     modelCapabilities.value = {}
@@ -217,48 +232,7 @@ const fetchCapabilitiesForModel = async (modelName) => {
 // --- Dynamic Parameters Logic ---
 
 const dynamicParameters = computed(() => {
-  const ranges = modelCapabilities.value?.parameters || {}
-  return Object.entries(ranges)
-    .filter(([, def]) => def && typeof def === 'object')
-    .map(([key, def]) => {
-      const base = { key, label: def.label || key, default: def.default }
-
-      if (def.type === 'enum') {
-        return { ...base, type: 'enum', options: def.options || [] }
-      }
-
-      if (def.type === 'string') {
-        return { ...base, type: 'string' }
-      }
-
-      // number / integer
-      const hasRange = def.min !== undefined && def.max !== undefined
-      const specialValues = Array.isArray(def.specialValues)
-        ? def.specialValues
-        : []
-
-      if (!hasRange && specialValues.length > 0) {
-        return { ...base, type: 'enum', options: specialValues }
-      }
-
-      const hintParts = [
-        ...specialValues.map((v) => `${v.label} (${v.value})`),
-        ...(hasRange ? [`${def.min} - ${def.max}`] : []),
-      ]
-      return {
-        ...base,
-        type: def.type || 'number',
-        min: def.min,
-        max: def.max,
-        step: def.step ?? (def.type === 'integer' ? 1 : 0.1),
-        hint: hintParts.join(', '),
-        disabled: !hasRange && specialValues.length === 0,
-      }
-    })
-})
-
-const supportsIncludeThoughts = computed(() => {
-  return modelCapabilities.value?.features?.includeThoughts === true
+  return normalizeDynamicParameters(modelCapabilities.value)
 })
 
 const supportsSystemInstruction = computed(() => {
@@ -276,13 +250,14 @@ onMounted(async () => {
   }
   allModelSettings.value = normalized
 
-  const modelToShow =
-    store.composerState.model ||
-    availableModels.value.find((group) => group.provider !== 'virtual')
-      ?.models?.[0] ||
-    allModels.value[0] ||
-    ''
+  const firstGroup =
+    availableModels.value.find((group) => group.provider !== 'virtual') ||
+    availableModels.value[0]
+  const modelToShow = store.composerState.model || firstGroup?.models?.[0] || ''
   selectedModel.value = modelToShow
+  selectedProviderId.value = store.composerState.model
+    ? store.composerState.providerId
+    : firstGroup?.provider || null
   loadSettingsForModel(modelToShow)
   fetchCapabilitiesForModel(modelToShow)
 })
@@ -294,6 +269,12 @@ watch(selectedModel, (newModel, oldModel) => {
   loadSettingsForModel(newModel)
   fetchCapabilitiesForModel(newModel)
 })
+
+const onModelChange = (event) => {
+  selectedModel.value = event.target.value
+  selectedProviderId.value =
+    event.target.selectedOptions?.[0]?.dataset?.providerId || null
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('mouseup', handleGlobalMouseUp)
@@ -490,15 +471,26 @@ const reset = () => {
   min-height: 120px;
 }
 
-.form-option {
-  display: inline-flex;
+.form-field--checkbox {
+  justify-content: center;
+}
+
+.checkbox-field {
+  display: flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   font-size: 14px;
+  font-weight: 500;
   color: var(--text-color);
+  cursor: pointer;
 }
 
-.form-option input {
+.checkbox-field input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
   accent-color: var(--primary-color);
 }
 

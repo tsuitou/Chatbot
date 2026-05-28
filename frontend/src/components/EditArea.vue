@@ -18,7 +18,10 @@
           v-for="file in attachments"
           :key="file.id"
           class="preview-card"
-          :class="{ expired: isExpired(file) }"
+          :class="{
+            expired: isExpired(file),
+            unsupported: isUnsupported(file),
+          }"
         >
           <div class="preview-thumbnail">
             <img
@@ -158,6 +161,7 @@ const attachments = computed(() => store.editorBucket?.items ?? [])
 const isDragging = computed(() => dragCounter.value > 0)
 
 const thumbnailManager = new BlobUrlManager()
+const thumbnailBlobRefs = new Map()
 
 const getThumbnailUrl = (attachment) => {
   if (!attachment || !attachment.mimeType?.startsWith('image/')) return null
@@ -217,11 +221,20 @@ watch(
       keepIds.add(att.id)
 
       if (att.mimeType?.startsWith('image/') && att.blob) {
-        thumbnailManager.create(att.id, att.blob)
+        const previousBlob = thumbnailBlobRefs.get(att.id)
+        if (!thumbnailManager.has(att.id) || previousBlob !== att.blob) {
+          thumbnailManager.create(att.id, att.blob)
+          thumbnailBlobRefs.set(att.id, att.blob)
+        }
       }
     }
 
     thumbnailManager.cleanup(keepIds)
+    for (const id of thumbnailBlobRefs.keys()) {
+      if (!keepIds.has(id)) {
+        thumbnailBlobRefs.delete(id)
+      }
+    }
   },
   { deep: true, immediate: true }
 )
@@ -358,6 +371,25 @@ const isExpired = (attachment) => {
   return new Date(attachment.expirationTime) < new Date()
 }
 
+const unsupportedFileIds = computed(() => {
+  // Access store.currentModelCapabilities to establish dependency on active model policy
+  void store.currentModelCapabilities
+  const bucket = store.editorBucket
+  if (!bucket) return new Set()
+
+  const ids = new Set()
+  for (const file of bucket.items) {
+    if (bucket.isUnsupported?.(file)) {
+      ids.add(file.id)
+    }
+  }
+  return ids
+})
+
+const isUnsupported = (attachment) => {
+  return unsupportedFileIds.value.has(attachment.id)
+}
+
 // Clean up object URLs to prevent memory leaks
 onUnmounted(() => {
   const textarea = textInput.value
@@ -366,6 +398,7 @@ onUnmounted(() => {
     textarea.style.overflowY = ''
   }
   thumbnailManager.clear()
+  thumbnailBlobRefs.clear()
 })
 </script>
 
@@ -583,7 +616,10 @@ onUnmounted(() => {
 .secondary-button:hover {
   background-color: var(--bg-gray);
 }
-.preview-card.expired {
+.preview-card.expired .preview-thumbnail,
+.preview-card.unsupported .preview-thumbnail,
+.preview-card.expired .preview-details,
+.preview-card.unsupported .preview-details {
   opacity: 0.5;
   filter: grayscale(80%);
 }

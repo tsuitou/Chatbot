@@ -39,14 +39,18 @@ onMounted(async () => {
     const preferredDefaultModel = await getDefaultModel()
     const groups = chatStore.availableModels
     const allModels = chatStore.allAvailableModels
-    const firstRealModel =
-      groups.find((group) => group.provider !== 'virtual')?.models?.[0] ||
-      allModels[0]
+    const firstRealGroup =
+      groups.find((group) => group.provider !== 'virtual') || groups[0]
+    const firstRealModel = firstRealGroup?.models?.[0] || allModels[0]
     const defaultModel = allModels.includes(preferredDefaultModel)
       ? preferredDefaultModel
       : firstRealModel
-    chatStore.setDefaultModel(defaultModel)
-    await chatStore.selectModel(defaultModel)
+    const defaultGroup =
+      groups.find((group) => group.models?.includes(defaultModel)) ||
+      firstRealGroup
+    const defaultProviderId = defaultGroup?.provider || null
+    chatStore.setDefaultModel(defaultModel, defaultProviderId)
+    await chatStore.selectModel(defaultModel, defaultProviderId)
     chatConfigStore.prepareForNewChat({
       systemPrompt: chatStore.currentRequestConfig.systemInstruction || '',
     })

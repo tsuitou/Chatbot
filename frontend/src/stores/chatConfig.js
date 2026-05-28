@@ -296,49 +296,30 @@ export const useChatConfigStore = defineStore('chatConfig', {
       target.systemPrompt = typeof nextPrompt === 'string' ? nextPrompt : ''
     },
 
-    getSystemPrompt(chatId, fallback = '') {
+    _getSetting(chatId, key, fallback) {
       if (chatId && this.settingsByChatId[chatId]) {
-        return this.settingsByChatId[chatId].systemPrompt || fallback || ''
+        return this.settingsByChatId[chatId][key] || fallback
       }
       if (!chatId && this.pendingSettings) {
-        return this.pendingSettings.systemPrompt || fallback || ''
+        return this.pendingSettings[key] || fallback
       }
-      return fallback || ''
+      return fallback
+    },
+
+    getSystemPrompt(chatId, fallback = '') {
+      return this._getSetting(chatId, 'systemPrompt', fallback)
     },
 
     getTransformSource(chatId) {
-      if (chatId && this.settingsByChatId[chatId]) {
-        return this.settingsByChatId[chatId].transformSource || ''
-      }
-      if (!chatId && this.pendingSettings) {
-        return this.pendingSettings.transformSource || ''
-      }
-      return ''
+      return this._getSetting(chatId, 'transformSource', '')
     },
 
     getResponseTransforms(chatId) {
-      if (chatId && this.settingsByChatId[chatId]) {
-        return this.settingsByChatId[chatId].responseTransforms || []
-      }
-      if (!chatId && this.pendingSettings) {
-        return this.pendingSettings.responseTransforms || []
-      }
-      return []
+      return this._getSetting(chatId, 'responseTransforms', [])
     },
 
     getAutoMessages(chatId) {
-      if (chatId && this.settingsByChatId[chatId]) {
-        return (
-          this.settingsByChatId[chatId].autoMessages || {
-            pre: [],
-            post: [],
-          }
-        )
-      }
-      if (!chatId && this.pendingSettings) {
-        return this.pendingSettings.autoMessages || { pre: [], post: [] }
-      }
-      return { pre: [], post: [] }
+      return this._getSetting(chatId, 'autoMessages', { pre: [], post: [] })
     },
 
     getTransformErrors(chatId) {

@@ -145,8 +145,16 @@ function buildDeepResearchToolConfig(agentTools) {
                 type: 'string',
                 description: `Required Deep Research agent name. Choose exactly one name from this JSON list: ${agentJson}`,
               },
+              session_id: {
+                type: 'string',
+                description: 'The session_id field from the latest non-expired Deep Research session block in the chat history.',
+              },
+              previous_interaction_id: {
+                type: 'string',
+                description: 'The latest_interaction_id field from the latest non-expired Deep Research session block in the chat history.',
+              },
             },
-            required: ['instruction', 'agent'],
+            required: ['instruction', 'agent', 'session_id', 'previous_interaction_id'],
           },
         },
         {
@@ -165,8 +173,16 @@ function buildDeepResearchToolConfig(agentTools) {
                 type: 'string',
                 description: `Required Deep Research agent name. Choose exactly one name from this JSON list: ${agentJson}`,
               },
+              session_id: {
+                type: 'string',
+                description: 'The session_id field from the latest non-expired Deep Research session block in the chat history.',
+              },
+              previous_interaction_id: {
+                type: 'string',
+                description: 'The latest_interaction_id field from the latest non-expired Deep Research session block in the chat history.',
+              },
             },
-            required: ['agent'],
+            required: ['agent', 'session_id', 'previous_interaction_id'],
           },
         },
       ],
@@ -193,60 +209,9 @@ function textFromContent(content) {
     .join('')
 }
 
-function extractUserText(contents = []) {
-  const userTurns = Array.isArray(contents)
-    ? contents.filter((item) => item?.role === 'user')
-    : []
-  const last = userTurns[userTurns.length - 1]
-  return (last?.parts || []).map(textFromPart).filter(Boolean).join('\n').trim()
-}
-
-function extractAllText(contents = []) {
-  if (!Array.isArray(contents)) return ''
-  return contents
-    .map((content) => (content.parts || []).map(textFromPart).join('\n'))
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function parseSessionBlocks(text) {
-  const blocks = []
-  const marker = 'Deep Research セッション'
-  let index = 0
-  while ((index = text.indexOf(marker, index)) !== -1) {
-    const start = Math.max(0, text.lastIndexOf('---', index))
-    const next = text.indexOf('\n---', index + marker.length)
-    const end = next === -1 ? text.length : next
-    const raw = text.slice(start, end)
-    const block = { raw }
-    for (const line of raw.split(/\r?\n/)) {
-      const match = line.match(/^([A-Za-z_]+):\s*(.*)$/)
-      if (match) block[match[1]] = match[2].trim()
-    }
-    blocks.push(block)
-    index = end
-  }
-  return blocks
-}
-
-function latestSessionFromContents(contents) {
-  const blocks = parseSessionBlocks(extractAllText(contents))
-  return blocks[blocks.length - 1] || null
-}
-
-function countExistingSessions(contents) {
-  return parseSessionBlocks(extractAllText(contents)).length
-}
-
-function createSessionId(contents, now = new Date()) {
-  const n = countExistingSessions(contents) + 1
-  return `dr_${normalizeDateOnly(now)}_${String(n).padStart(3, '0')}`
-}
-
-function isExpired(session, now = new Date()) {
-  if (!session?.interaction_expires_at) return false
-  const expires = new Date(`${session.interaction_expires_at}T23:59:59.999Z`)
-  return Number.isFinite(expires.getTime()) && expires < now
+function createSessionId(now = new Date()) {
+  const suffix = Math.random().toString(36).slice(2, 7)
+  return `dr_${normalizeDateOnly(now)}_${suffix}`
 }
 
 function normalizeInteractionStatus(status, action) {
@@ -306,26 +271,21 @@ function buildSessionBlock({
   expiresAt,
 }) {
   const lines = [
-    '',
-    '',
-    '---',
-    `session_id: ${sessionId}\n\n`,
-    `agent: ${agent}\n\n`,
-    `mode: ${action}\n\n`,
-    `status: ${status}\n\n`,
-    `created_at: ${normalizeDateOnly(new Date(createdAt))}\n\n`,
+    `session_id: ${sessionId}`,
+    `agent: ${agent}`,
+    `mode: ${action}`,
+    `status: ${status}`,
+    `created_at: ${normalizeDateOnly(new Date(createdAt))}`,
   ]
   if (completedAt) {
-    lines.push(`completed_at: ${normalizeDateOnly(new Date(completedAt))}\n\n`)
+    lines.push(`completed_at: ${normalizeDateOnly(new Date(completedAt))}`)
   }
-  lines.push(`latest_interaction_id: ${interactionId}\n\n`)
+  lines.push(`latest_interaction_id: ${interactionId}`)
   if (previousInteractionId) {
-    lines.push(`previous_interaction_id: ${previousInteractionId}\n\n`)
+    lines.push(`previous_interaction_id: ${previousInteractionId}`)
   }
-  lines.push(
-    `interaction_expires_at: ${normalizeDateOnly(expiresAt)}\n\n`,
-  )
-  return lines.join('\n')
+  lines.push(`interaction_expires_at: ${normalizeDateOnly(expiresAt)}`)
+  return '\n\n' + lines.map((line) => `> ${line}`).join('\n')
 }
 
 function emitPart(socket, { chatId, requestId, text, thought = false, metadata }) {
@@ -370,6 +330,11 @@ function buildMergedSystemInstruction({
       '- If the latest Deep Research session block has status: planning and the user asks to change the plan, call deep_research_refine.',
       '- The session block field `mode: plan` means the previous API call used collaborative planning. It does not mean that the next turn should call deep_research_plan.',
       '- If the latest Deep Research session is completed or expired, answer from local chat history unless the user explicitly asks to start a new research session.',
+      'Session ID rules for deep_research_refine and deep_research_run:',
+      '- Read the latest Deep Research session block from the chat history.',
+      '- Pass its `session_id` field as the `session_id` argument.',
+      '- Pass its `latest_interaction_id` field as the `previous_interaction_id` argument.',
+      '- A session is expired when today\'s date is strictly after the `interaction_expires_at` date. Do not use expired sessions.',
       'Use the provided function tools to start, refine, or run Deep Research. Do not claim that Deep Research was used unless you called one of those tools.',
       'When Deep Research is used, preserve the session information in the chat text so future turns can continue from local history.',
       formatToolKnowledge(agentTools),
@@ -379,37 +344,6 @@ function buildMergedSystemInstruction({
     .join('\n\n')
 }
 
-function buildInteractionInputWithInstructions({
-  action,
-  userText,
-  systemInstruction,
-}) {
-  const globalInstruction = systemInstruction
-    ? [
-        'System instructions to follow:',
-        systemInstruction,
-      ].join('\n')
-    : null
-  if (action === 'run') {
-    return [
-      'The user approved the current Deep Research plan. Execute the research now.',
-      userText ? `Additional user instruction: ${userText}` : null,
-      globalInstruction,
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-  }
-  if (action === 'refine') {
-    return [
-      'Revise the current Deep Research plan according to the user instruction.',
-      userText || 'Refine the plan.',
-      globalInstruction,
-    ].join('\n\n')
-  }
-  return [userText || 'Create a Deep Research plan.', globalInstruction]
-    .filter(Boolean)
-    .join('\n\n')
-}
 
 function parseFunctionArgs(args) {
   if (!args) return {}
@@ -446,9 +380,9 @@ function chooseResearchAgentFromArgs(args, agentTools) {
   return null
 }
 
-function textFromToolArgs(action, args, fallback) {
-  if (action === 'plan') return String(args.input || fallback || '').trim()
-  return String(args.instruction || fallback || '').trim()
+function textFromToolArgs(action, args) {
+  if (action === 'plan') return String(args.input || '').trim()
+  return String(args.instruction || '').trim()
 }
 
 function buildAgentModelConfig({ systemInstruction, agentTools }) {
@@ -503,7 +437,6 @@ async function runDeepResearchInteraction({
   requestId,
   action,
   userText,
-  systemInstruction,
   sessionId,
   previousInteractionId,
   agent,
@@ -513,18 +446,14 @@ async function runDeepResearchInteraction({
   const expiresAt = addDays(now, retentionDays)
   const params = {
     agent,
-    input: buildInteractionInputWithInstructions({
-      action,
-      userText,
-      systemInstruction,
-    }),
+    input: userText,
     background: true,
-    stream: true,
+		stream: true,
     agent_config: {
       type: 'deep-research',
       thinking_summaries: 'auto',
       collaborative_planning: action !== 'run',
-      visualization: 'off',
+			visualization: 'off',
     },
   }
   if (previousInteractionId) {
@@ -662,8 +591,16 @@ export async function runDeepResearchAgentSession({
     systemInstructionMode,
     agentTools,
   })
+  if (!hasDeepResearchTool(agentTools)) {
+    emitPart(socket, {
+      chatId,
+      requestId,
+      text: 'No Deep Research agent is enabled in agent-tools.json.',
+    })
+    socket.emit('end_generation', { ok: true, chatId, requestId })
+    return
+  }
 
-  const userText = extractUserText(contents)
   const agentTurn = await streamAgentModelTurn({
     ai,
     model: baseModel,
@@ -686,16 +623,6 @@ export async function runDeepResearchAgentSession({
   }
 
   const retentionDays = resolveRetentionDays()
-  if (!hasDeepResearchTool(agentTools)) {
-    emitPart(socket, {
-      chatId,
-      requestId,
-      text: 'No Deep Research agent is enabled in agent-tools.json.',
-    })
-    socket.emit('end_generation', { ok: true, chatId, requestId })
-    return
-  }
-
   const action = actionFromFunctionName(functionCall.name)
   if (!action) {
     emitPart(socket, {
@@ -708,16 +635,13 @@ export async function runDeepResearchAgentSession({
   }
 
   const args = parseFunctionArgs(functionCall.args || functionCall.arguments)
-  const latestSession = latestSessionFromContents(contents)
   const sessionId =
-    latestSession && !isExpired(latestSession)
-      ? latestSession.session_id || createSessionId(contents)
-      : createSessionId(contents)
+    action === 'plan'
+      ? createSessionId()
+      : String(args.session_id || '').trim() || null
   const previousInteractionId =
-    (action === 'refine' || action === 'run') &&
-    latestSession &&
-    !isExpired(latestSession)
-      ? latestSession?.latest_interaction_id
+    action === 'refine' || action === 'run'
+      ? String(args.previous_interaction_id || '').trim() || null
       : null
 
   if ((action === 'refine' || action === 'run') && !previousInteractionId) {
@@ -742,7 +666,7 @@ export async function runDeepResearchAgentSession({
     socket.emit('end_generation', { ok: true, chatId, requestId })
     return
   }
-  const researchText = textFromToolArgs(action, args, userText)
+  const researchText = textFromToolArgs(action, args)
 
   await runDeepResearchInteraction({
     ai,
@@ -751,7 +675,6 @@ export async function runDeepResearchAgentSession({
     requestId,
     action,
     userText: researchText,
-    systemInstruction,
     sessionId,
     previousInteractionId,
     agent,

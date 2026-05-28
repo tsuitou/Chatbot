@@ -1,5 +1,6 @@
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
+import remarkBreaks from 'remark-breaks'
 import remarkMath from 'remark-math'
 import remarkRehype from 'remark-rehype'
 import rehypeKatex from 'rehype-katex'
@@ -12,6 +13,7 @@ import hljs from 'highlight.js'
 
 const segmentProcessor = unified()
   .use(remarkGfm)
+  .use(remarkBreaks)
   .use(remarkMath, { singleDollarTextMath: false })
   .use(remarkRehype, { allowDangerousHtml: false })
   .use(rehypeKatex)
@@ -20,6 +22,7 @@ const segmentProcessor = unified()
 const parseProcessor = unified()
   .use(remarkParse)
   .use(remarkGfm)
+  .use(remarkBreaks)
   .use(remarkMath, { singleDollarTextMath: false })
 
 export async function parseModelResponse(rawText) {

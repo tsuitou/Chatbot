@@ -1,14 +1,9 @@
-import { getDefaultProviderId, getProviderById } from './providers'
-import {
-  base64ToBlob,
-  blobToBase64,
-  normalizeError as defaultNormalizeError,
-} from './providers/utils'
+import { base64ToBlob, blobToBase64 } from './apiUtils'
 import { v4 as uuidv4 } from 'uuid'
 
 // --- Public API ---
 
-async function buildCanonicalParts(message) {
+async function buildCanonicalParts(message, { allowRemoteUpload = true } = {}) {
   const parts = []
   const text = message?.content?.text ?? ''
   if (text) {
@@ -16,7 +11,7 @@ async function buildCanonicalParts(message) {
   }
 
   for (const att of message?.attachments || []) {
-    if (att.remoteUri) {
+    if (att.remoteUri && allowRemoteUpload) {
       parts.push({
         type: 'file',
         mimeType: att.mimeType,
@@ -30,6 +25,8 @@ async function buildCanonicalParts(message) {
         name: att.name,
         data: await blobToBase64(att.blob),
       })
+    } else if (att.remoteUri && !allowRemoteUpload) {
+      continue
     } else {
       throw new Error(
         `Attachment "${att?.name || att?.id || '(unknown)'}" has no usable data.`
@@ -56,7 +53,7 @@ async function buildCanonicalParts(message) {
   return parts
 }
 
-async function buildCanonicalMessages(messages) {
+async function buildCanonicalMessages(messages, options = {}) {
   const result = []
   for (const message of messages) {
     if (!message?.sender) continue
@@ -64,7 +61,7 @@ async function buildCanonicalMessages(messages) {
     if (!['user', 'model', 'system', 'tool'].includes(role)) continue
     result.push({
       role,
-      parts: await buildCanonicalParts(message),
+      parts: await buildCanonicalParts(message, options),
     })
   }
   return result
@@ -82,20 +79,20 @@ export async function createApiRequest({
     throw new Error('Model name is required to create an API request')
   }
 
-  const providerId = requestConfig.providerId || getDefaultProviderId()
-
   const sorted = [...messages].sort(
     (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
   )
 
+  const attachmentPolicy = requestConfig.attachments || {}
+  const allowRemoteUpload = attachmentPolicy.allowRemoteUpload === true
+
   return {
-    provider: providerId,
+    provider: requestConfig.providerId || null,
     chatId,
     requestId,
     model,
-    messages: await buildCanonicalMessages(sorted),
+    messages: await buildCanonicalMessages(sorted, { allowRemoteUpload }),
     parameters: { ...(requestConfig.parameters || {}) },
-    options: { ...(requestConfig.options || {}) },
     tools: { ...(requestConfig.tools || {}) },
     systemInstruction: requestConfig.systemInstruction || '',
     streaming,
@@ -129,10 +126,3 @@ export function parseApiResponse(rawChunk) {
   return result
 }
 
-export function normalizeError(rawError, phase, providerId) {
-  const provider = getProviderById(providerId)
-  if (provider?.normalizeError) {
-    return provider.normalizeError(rawError, phase)
-  }
-  return defaultNormalizeError(rawError, phase, providerId)
-}

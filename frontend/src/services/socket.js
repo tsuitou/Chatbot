@@ -1,5 +1,4 @@
 import { io } from 'socket.io-client'
-import { useChatStore } from '../stores/chat'
 
 const resolveSocketUrl = () => {
   const raw = import.meta.env?.VITE_SOCKET_URL
@@ -14,17 +13,31 @@ const resolveSocketUrl = () => {
   return ''
 }
 
+const resolveSocketPath = () => {
+  const raw = import.meta.env?.VITE_SOCKET_PATH
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    return '/chatbot/socket.io'
+  }
+
+  const path = raw.trim()
+  return path.startsWith('/') ? path : `/${path}`
+}
+
 const socket = io(resolveSocketUrl(), {
   autoConnect: false,
-  path: '/chatbot/socket.io',
+  path: resolveSocketPath(),
 })
 
-let store
+let handlers = {
+  onChunk: () => {},
+  onEnd: () => {},
+  onError: () => {},
+}
 
-const initializeStore = () => {
-  if (!store) {
-    store = useChatStore()
-  }
+export const registerSocketHandlers = ({ onChunk, onEnd, onError }) => {
+  if (onChunk) handlers.onChunk = onChunk
+  if (onEnd) handlers.onEnd = onEnd
+  if (onError) handlers.onError = onError
 }
 
 socket.on('connect', () => {
@@ -36,19 +49,16 @@ socket.on('disconnect', () => {
 })
 
 socket.on('chunk', (rawChunk) => {
-  initializeStore()
-  store.handleStreamChunk(rawChunk)
+  handlers.onChunk(rawChunk)
 })
 
 socket.on('end_generation', (result) => {
-  initializeStore()
-  store.handleStreamEnd(result)
+  handlers.onEnd(result)
 })
 
 socket.on('error', (rawError) => {
-  initializeStore()
   console.error('Socket error:', rawError)
-  store.handleStreamError(rawError)
+  handlers.onError(rawError)
 })
 
 socket.on('frontend_reload', (payload) => {
@@ -75,13 +85,12 @@ export const startGeneration = (payload) => {
     socket.emit('start_generation', payload)
   } else {
     console.error('Socket not connected. Cannot start generation.')
-    initializeStore()
     const error = {
       message: 'Not connected to the server.',
       chatId: payload.chatId,
       requestId: payload.requestId,
     }
-    store.handleStreamError(error)
+    handlers.onError(error)
   }
 }
 

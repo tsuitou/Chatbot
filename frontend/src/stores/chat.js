@@ -3,15 +3,14 @@ import { toRaw } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import * as db from '../services/db'
 import * as apiAdapter from '../services/apiAdapter'
-import { getModelCapabilities } from '../services/api'
-import { startGeneration } from '../services/socket'
+import { getModelCapabilities, uploadFile } from '../services/api'
+import { startGeneration, registerSocketHandlers } from '../services/socket'
 import { showErrorToast } from '../services/notification'
 import { exportChatAsHTML } from '../services/htmlExporter'
 import {
   normalizeSettingsEntry,
   cloneSettings as cloneModelSettings,
 } from '../services/modelConfig'
-import { getDefaultProviderId, getProviderById } from '../services/providers'
 import { createAttachmentBucket } from '../services/attachments'
 import { useChatConfigStore } from './chatConfig'
 import { applyResponseTransforms } from '../services/responseTransforms'
@@ -32,11 +31,9 @@ import {
 
 const DEFAULT_TITLE = 'New Chat'
 const TITLE_MAX_LEN = 30
-const MAX_INLINE_ATTACHMENT_SIZE = 10 * 1024 * 1024
 const EMPTY_CAPABILITIES = Object.freeze({
   features: {},
   parameters: {},
-  options: {},
   tools: {},
   attachments: { enabled: false },
 })
@@ -88,15 +85,15 @@ function normalizeModelGroups(input) {
   if (input.every((item) => typeof item === 'string')) {
     return [
       {
-        provider: getDefaultProviderId(),
-        label: 'Google Gemini',
+        provider: null,
+        label: 'Models',
         models: [...input],
       },
     ]
   }
   return input
     .map((group) => ({
-      provider: group?.provider || getDefaultProviderId(),
+      provider: group?.provider || null,
       label: group?.label || group?.provider || 'Models',
       models: Array.isArray(group?.models) ? [...group.models] : [],
     }))
@@ -110,7 +107,7 @@ function flattenModelGroups(groups) {
 }
 
 function capabilityKey(providerId, model) {
-  return `${providerId || getDefaultProviderId()}:${model || ''}`
+  return `${providerId || ''}:${model || ''}`
 }
 
 function enabledTools(selectedTools = {}, toolDefinitions = {}) {
@@ -146,7 +143,7 @@ export const useChatStore = defineStore('chat', {
       model: null,
       streamingEnabled: true,
       tools: createDefaultToolSettings(),
-      providerId: getDefaultProviderId(),
+      providerId: null,
       attachmentBucket: createAttachmentBucket(),
     },
     editingState: null,
@@ -186,7 +183,7 @@ export const useChatStore = defineStore('chat', {
     currentModelCapabilities(state) {
       const model = state.composerState.model
       if (!model) return EMPTY_CAPABILITIES
-      const providerId = this.findProviderForModel(model)
+      const providerId = state.composerState.providerId
       return (
         state.appState.modelCapabilitiesByKey[
           capabilityKey(providerId, model)
@@ -204,9 +201,7 @@ export const useChatStore = defineStore('chat', {
         model
       )
       const settings = cloneModelSettings(normalized)
-      const providerId = model
-        ? this.findProviderForModel(model)
-        : settings.providerId || state.composerState.providerId
+      const providerId = state.composerState.providerId || settings.providerId
       const chatConfigStore = useChatConfigStore()
       const activeChatId = state.chatState.active?.meta?.id || null
       const systemInstruction = chatConfigStore.getSystemPrompt(activeChatId)
@@ -216,8 +211,8 @@ export const useChatStore = defineStore('chat', {
         providerId,
         model,
         tools,
+        attachments: this.currentModelCapabilities.attachments || {},
         parameters: { ...settings.parameters },
-        options: { ...settings.options },
         systemInstruction,
         streaming,
       }
@@ -231,15 +226,14 @@ export const useChatStore = defineStore('chat', {
         return {
           allowRemoteUpload: false,
           allowedMimes: new Set(),
-          maxInlineFileSize: MAX_INLINE_ATTACHMENT_SIZE,
+          maxInlineFileSize: null,
         }
       }
       return {
         ...policy,
         allowRemoteUpload: policy.allowRemoteUpload === true,
         allowedMimes: policy.allowedMimes || null,
-        maxInlineFileSize:
-          policy.maxInlineFileSize || MAX_INLINE_ATTACHMENT_SIZE,
+        maxInlineFileSize: policy.maxInlineFileSize || null,
       }
     },
 
@@ -248,13 +242,12 @@ export const useChatStore = defineStore('chat', {
         ...options,
         policy: () => this._attachmentPolicyForCurrentModel(),
         uploadFn: async (file, uploadOptions) => {
-          const provider = getProviderById(this.currentRequestConfig.providerId)
-          if (typeof provider.uploadAttachment !== 'function') {
-            throw new Error(
-              'Attachment upload is not supported for this provider.'
-            )
-          }
-          return provider.uploadAttachment(file, uploadOptions)
+          const { model, providerId } = this.currentRequestConfig
+          return uploadFile(file, {
+            model,
+            providerId,
+            onProgress: uploadOptions?.onProgress,
+          })
         },
       })
     },
@@ -263,39 +256,28 @@ export const useChatStore = defineStore('chat', {
       this.appState.availableModels = normalizeModelGroups(models)
     },
 
-    setDefaultModel(model) {
+    setDefaultModel(model, providerId = null) {
       this.appState.defaultModel = typeof model === 'string' ? model : null
       if (!this.composerState.model && this.appState.defaultModel) {
         this.composerState.model = this.appState.defaultModel
+        this.composerState.providerId = providerId
       }
     },
 
-    setActiveModel(model) {
+    setActiveModel(model, providerId = null) {
       this.composerState.model = typeof model === 'string' ? model : null
+      this.composerState.providerId = providerId
     },
 
-    async selectModel(model) {
-      this.setActiveModel(model)
-      this.setProviderId(this.findProviderForModel(model))
-      await this.ensureModelCapabilities(model)
+    async selectModel(model, providerId = null) {
+      this.setActiveModel(model, providerId)
+      await this.ensureModelCapabilities(model, providerId)
       this._pruneToolsForCurrentModel()
-    },
-
-    findProviderForModel(model) {
-      for (const group of this.appState.availableModels || []) {
-        if (Array.isArray(group.models) && group.models.includes(model)) {
-          return group.provider || getDefaultProviderId()
-        }
-      }
-      return getDefaultProviderId()
+      this.composerState.attachmentBucket.dropUnsupportedForCurrentPolicy?.()
     },
 
     setStreamingEnabled(enabled) {
       this.composerState.streamingEnabled = !!enabled
-    },
-
-    setProviderId(providerId) {
-      this.composerState.providerId = providerId || getDefaultProviderId()
     },
 
     setPrompt(value) {
@@ -326,9 +308,11 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
-    async ensureModelCapabilities(model = this.composerState.model) {
+    async ensureModelCapabilities(
+      model = this.composerState.model,
+      providerId = this.composerState.providerId
+    ) {
       if (!model) return EMPTY_CAPABILITIES
-      const providerId = this.findProviderForModel(model)
       const key = capabilityKey(providerId, model)
       const cached = this.appState.modelCapabilitiesByKey[key]
       if (cached) return cached
@@ -364,6 +348,11 @@ export const useChatStore = defineStore('chat', {
     },
 
     async initializeApp() {
+      registerSocketHandlers({
+        onChunk: (chunk) => this.handleStreamChunk(chunk),
+        onEnd: (result) => this.handleStreamEnd(result),
+        onError: (error) => this.handleStreamError(error),
+      })
       this.composerState.attachmentBucket = this._createAttachmentBucket()
       try {
         const [chatList, modelSettings] = await Promise.all([
@@ -848,6 +837,7 @@ export const useChatStore = defineStore('chat', {
       bucket.replaceAll(
         normalizeAttachments(message.attachments ?? [], message.sender)
       )
+      bucket.dropUnsupportedForCurrentPolicy?.()
 
       this.editingState = {
         messageId,
@@ -873,10 +863,24 @@ export const useChatStore = defineStore('chat', {
         return
       }
 
+      await this.ensureModelCapabilities()
+      this.editingState.attachmentBucket.dropUnsupportedForCurrentPolicy?.()
+      const attachmentIssue =
+        this.editingState.attachmentBucket.getBlockingIssue?.()
+      if (attachmentIssue) {
+        showErrorToast(attachmentIssue)
+        return
+      }
+
+      const allAttachments = this.editingState.attachmentBucket.list()
+      const attachments = allAttachments.filter(
+        (item) => !this.editingState.attachmentBucket.isUnsupported?.(item)
+      )
+
       const updated = {
         ...message,
         content: { text: this.editingState.draftText },
-        attachments: this.editingState.attachmentBucket.list(),
+        attachments,
         updatedAt: Date.now(),
       }
 
@@ -1094,7 +1098,7 @@ export const useChatStore = defineStore('chat', {
 
     async sendMessage() {
       const prompt = this.composerState.prompt || ''
-      const requestConfig = this.currentRequestConfig
+      let requestConfig = this.currentRequestConfig
 
       this.cancelEditing()
 
@@ -1103,8 +1107,24 @@ export const useChatStore = defineStore('chat', {
         return
       }
 
+      await this.ensureModelCapabilities(
+        requestConfig.model,
+        requestConfig.providerId
+      )
+      requestConfig = this.currentRequestConfig
+      this.composerState.attachmentBucket.dropUnsupportedForCurrentPolicy?.()
+      const attachmentIssue =
+        this.composerState.attachmentBucket.getBlockingIssue?.()
+      if (attachmentIssue) {
+        showErrorToast(attachmentIssue)
+        return
+      }
+
       const chatConfigStore = useChatConfigStore()
-      const attachments = this.composerState.attachmentBucket.list()
+      const allAttachments = this.composerState.attachmentBucket.list()
+      const attachments = allAttachments.filter(
+        (item) => !this.composerState.attachmentBucket.isUnsupported?.(item)
+      )
       const tempMessageIds = []
 
       try {
@@ -1184,7 +1204,7 @@ export const useChatStore = defineStore('chat', {
 
       // Identify configuration for resend
       const fallbackConfig = cloneConfigSnapshot(target.configSnapshot) || {}
-      const currentConfig = cloneConfigSnapshot(this.currentRequestConfig) || {}
+      const currentConfig = this.currentRequestConfig || {}
       const mergedTools = {
         ...(fallbackConfig.tools || {}),
         ...(currentConfig.tools || {}),

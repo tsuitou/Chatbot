@@ -164,7 +164,7 @@
           :download="att.name"
           class="attachment-chip"
           :title="attachmentTitle(att)"
-          :class="{ expired: isExpired(att) }"
+          :class="{ expired: isExpired(att), unsupported: isUnsupported(att) }"
           @click="handleAttachmentClick(att, $event)"
         >
           <font-awesome-icon icon="file-download" />
@@ -411,7 +411,9 @@ const getAttachmentUrl = (attachment) => {
 const attachmentTitle = (attachment) =>
   isExpired(attachment)
     ? `${attachment.name} (Expired)`
-    : `Download ${attachment.name}`
+    : isUnsupported(attachment)
+      ? `${attachment.name} (Unsupported by current model)`
+      : `Download ${attachment.name}`
 
 const handleAttachmentClick = (attachment, event) => {
   if (isExpired(attachment)) {
@@ -431,6 +433,25 @@ const handleAttachmentClick = (attachment, event) => {
 const isExpired = (attachment) => {
   if (!attachment.expirationTime) return false
   return new Date(attachment.expirationTime) < new Date()
+}
+
+const unsupportedFileIds = computed(() => {
+  // Access currentModelCapabilities to register reactive dependency on active model
+  void chatStore.currentModelCapabilities
+  const bucket = chatStore.composerBucket
+  if (!bucket) return new Set()
+
+  const ids = new Set()
+  for (const file of props.group?.content?.attachments || []) {
+    if (bucket.isUnsupported?.(file)) {
+      ids.add(file.id)
+    }
+  }
+  return ids
+})
+
+const isUnsupported = (attachment) => {
+  return unsupportedFileIds.value.has(attachment.id)
 }
 </script>
 
@@ -686,9 +707,9 @@ const isExpired = (attachment) => {
   background-color: var(--bg-grey);
 }
 
-.attachment-chip.expired {
+.attachment-chip.expired,
+.attachment-chip.unsupported {
   opacity: 0.5;
-  cursor: not-allowed;
   filter: grayscale(80%);
 }
 

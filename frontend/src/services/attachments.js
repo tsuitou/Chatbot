@@ -2,8 +2,8 @@ import { reactive } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { read as readXlsx, utils as xlsxUtils } from 'xlsx'
 import { showErrorToast } from './notification'
+import { MAX_UPLOAD_FILE_SIZE } from './env'
 
-const MAX_FILE_SIZE_DEFAULT = 10 * 1024 * 1024 // 10MB
 const MAX_ATTACHMENTS = 10
 
 const DEFAULT_ATTACHMENT_POLICY = Object.freeze({
@@ -157,10 +157,6 @@ const TEXT_EXTENSIONS = new Set([
   'properties',
 ])
 
-function isMediaFile(file) {
-  return file.type.startsWith('video/') || file.type.startsWith('audio/')
-}
-
 function resolveExtension(name) {
   return name?.split('.')?.pop()?.toLowerCase() || ''
 }
@@ -185,13 +181,6 @@ async function normalizeFile(file) {
 function validateFile(file) {
   if (!ALLOWED_MIMES.has(file.type)) {
     throw new Error(`File type not allowed: ${file.type || file.name}`)
-  }
-
-  const isMedia = isMediaFile(file)
-  if (!isMedia && file.size > MAX_FILE_SIZE_DEFAULT) {
-    throw new Error(
-      `File size exceeds ${MAX_FILE_SIZE_DEFAULT / 1024 / 1024}MB limit: ${file.name}`
-    )
   }
 }
 
@@ -220,10 +209,10 @@ async function convertFile(file) {
   }
 }
 
-async function buildAttachmentRecord(file) {
-  const requiresRemoteUpload =
-    isMediaFile(file) && file.size > MAX_FILE_SIZE_DEFAULT
-
+async function buildAttachmentRecord(
+  file,
+  { requiresRemoteUpload = false } = {}
+) {
   // Read the file content into memory to break dependency on the original file
   let independentBlob
   try {
@@ -274,7 +263,7 @@ export function createAttachmentBucket(options = {}) {
   const maxFileSize =
     typeof options.maxFileSize === 'number' && options.maxFileSize > 0
       ? options.maxFileSize
-      : null
+      : MAX_UPLOAD_FILE_SIZE
 
   function resolvePolicy() {
     const raw =
@@ -314,6 +303,11 @@ export function createAttachmentBucket(options = {}) {
 
     const policy = resolvePolicy()
     const allowRemoteUpload = policy.allowRemoteUpload !== false
+    const maxInlineFileSize =
+      typeof policy.maxInlineFileSize === 'number' &&
+      policy.maxInlineFileSize > 0
+        ? policy.maxInlineFileSize
+        : null
 
     for (const file of files) {
       try {
@@ -324,6 +318,12 @@ export function createAttachmentBucket(options = {}) {
           )
         }
         validateFile(normalized)
+        if (maxFileSize && normalized.size > maxFileSize) {
+          showErrorToast(
+            `Attachments must be smaller than ${formatFileSize(maxFileSize)}.`
+          )
+          continue
+        }
         const processed = await convertFile(normalized)
         if (!isMimeAllowed(processed, policy)) {
           throw new Error(
@@ -337,31 +337,27 @@ export function createAttachmentBucket(options = {}) {
           continue
         }
         if (
-          policy.maxInlineFileSize &&
-          processed.size > policy.maxInlineFileSize &&
+          maxInlineFileSize &&
+          processed.size > maxInlineFileSize &&
           !allowRemoteUpload
         ) {
           showErrorToast(
             `Attachments must be smaller than ${formatFileSize(
-              policy.maxInlineFileSize
+              maxInlineFileSize
             )} for this model.`
           )
           continue
         }
-        const record = await buildAttachmentRecord(processed)
-        if (!allowRemoteUpload && record.uploadProgress < 100) {
-          const limit =
-            policy.maxInlineFileSize || maxFileSize || MAX_FILE_SIZE_DEFAULT
-          showErrorToast(
-            `Attachments larger than ${formatFileSize(
-              limit
-            )} cannot be used here.`
-          )
-          continue
-        }
+        const requiresRemoteUpload =
+          allowRemoteUpload &&
+          maxInlineFileSize &&
+          processed.size > maxInlineFileSize
+        const record = await buildAttachmentRecord(processed, {
+          requiresRemoteUpload,
+        })
         attachments.push(record)
         const reactiveAttachment = attachments[attachments.length - 1]
-        if (reactiveAttachment.uploadProgress < 100 && allowRemoteUpload) {
+        if (requiresRemoteUpload) {
           void startUpload(reactiveAttachment, processed)
         }
       } catch (error) {
@@ -391,16 +387,59 @@ export function createAttachmentBucket(options = {}) {
         rejected = true
         continue
       }
-      const policy = resolvePolicy()
-      if (!policy.allowRemoteUpload && cloned.remoteUri) {
-        rejected = true
-        continue
-      }
       attachments.push(cloned)
     }
     if (rejected) {
       showErrorToast('Some attachments were skipped because of size limits.')
     }
+  }
+
+  function isUploadPending(attachment) {
+    if (!attachment || attachment.error) return false
+    return attachment.uploadProgress !== 100
+  }
+
+  function isUnsupported(item) {
+    if (!item) return false
+    const policy = resolvePolicy()
+    const inlineLimit =
+      typeof policy.maxInlineFileSize === 'number' &&
+      policy.maxInlineFileSize > 0
+        ? policy.maxInlineFileSize
+        : null
+    return (
+      policy.enabled !== true ||
+      !isMimeAllowed({ type: item.mimeType }, policy) ||
+      (maxFileSize && item.size > maxFileSize) ||
+      (!policy.allowRemoteUpload && item.remoteUri && !item.blob) ||
+      (!policy.allowRemoteUpload && inlineLimit && item.size > inlineLimit)
+    )
+  }
+
+  function getBlockingIssue() {
+    if (attachments.some((item) => item.error)) {
+      return 'Some attachments failed to upload. Remove them or try again.'
+    }
+    if (attachments.some(isUploadPending)) {
+      return 'Please wait for attachments to finish uploading.'
+    }
+    return null
+  }
+
+  function dropUnsupportedForCurrentPolicy() {
+    const policy = resolvePolicy()
+    let unsupportedCount = 0
+
+    for (const item of attachments) {
+      if (!policy.allowRemoteUpload && item.remoteUri && item.blob) {
+        item.remoteUri = null
+      }
+      if (isUnsupported(item)) {
+        unsupportedCount++
+      }
+    }
+
+    return unsupportedCount
   }
 
   function list() {
@@ -422,8 +461,12 @@ export function createAttachmentBucket(options = {}) {
           attachment.uploadProgress = percentage
         },
       })
+      const remoteUri = result?.uri ?? result?.remoteUri ?? null
+      if (!remoteUri) {
+        throw new Error('File upload completed without a usable file URI.')
+      }
       attachment.uploadProgress = 100
-      attachment.remoteUri = result?.uri ?? result?.remoteUri ?? null
+      attachment.remoteUri = remoteUri
       attachment.blob = null
       if (result?.expiresAt) {
         attachment.expirationTime = result.expiresAt
@@ -442,7 +485,10 @@ export function createAttachmentBucket(options = {}) {
     remove,
     clear,
     replaceAll,
+    getBlockingIssue,
+    dropUnsupportedForCurrentPolicy,
     list,
+    isUnsupported,
   }
 }
 

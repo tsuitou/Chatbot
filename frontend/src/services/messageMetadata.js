@@ -7,13 +7,6 @@ function parametersFromConfig(config) {
     : {}
 }
 
-function optionsFromConfig(config) {
-  if (!config) return {}
-  return config.options && typeof config.options === 'object'
-    ? config.options
-    : {}
-}
-
 const PARAMETER_LABELS = {
   temperature: 'Temp',
   topP: 'Top-P',
@@ -42,10 +35,10 @@ export function buildDisplayIndicators(message) {
   const indicators = []
   const config = message?.configSnapshot || {}
   const params = parametersFromConfig(config)
-  const options = optionsFromConfig(config)
 
   if (config.model) indicators.push({ icon: 'robot', text: config.model })
   for (const [key, value] of Object.entries(params)) {
+    if (key === 'includeThoughts') continue
     const label = PARAMETER_LABELS[key]
     if (label === undefined || value === undefined) continue
     indicators.push({
@@ -53,7 +46,7 @@ export function buildDisplayIndicators(message) {
       text: `${label}: ${value}`,
     })
   }
-  if (options.includeThoughts) {
+  if (params.includeThoughts) {
     indicators.push({ icon: 'check', text: 'Include Thoughts' })
   }
   for (const [key, value] of Object.entries(config.tools || {})) {

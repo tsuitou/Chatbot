@@ -116,6 +116,10 @@ export const useDisplayStore = defineStore('display', {
     },
 
     async _syncFromMessages(messages, { chatChanged = false } = {}) {
+      this._syncGeneration = (this._syncGeneration || 0) + 1
+      const syncGeneration = this._syncGeneration
+      const isStaleSync = () => syncGeneration !== this._syncGeneration
+
       if (!this._contentCache) this._contentCache = new Map()
       if (!this._thoughtCache) this._thoughtCache = new Map()
       if (!this._groupCache) this._groupCache = new Map()
@@ -144,12 +148,11 @@ export const useDisplayStore = defineStore('display', {
       const previousActive = { ...this.ui.activeSystemBubbles }
 
       const validIds = new Set(messages.map((m) => m.id))
-      const groups = []
       const previewable = []
       const nextActiveSystemBubbles = {}
       const nextCollapsedState = {}
 
-      for (const message of messages) {
+      const groupPromises = messages.map(async (message) => {
         const messageId = message.id
         const isModelMessage = message.sender === 'model'
         const uiFlags = message.uiFlags || {}
@@ -220,8 +223,13 @@ export const useDisplayStore = defineStore('display', {
           this._groupCache.set(messageId, { changeKey, group })
         }
 
-        groups.push(group)
+        return group
+      })
 
+      const groups = await Promise.all(groupPromises)
+      if (isStaleSync()) return
+
+      for (const group of groups) {
         for (const att of group.content.attachments) {
           if (!PREVIEWABLE_MIMES.has(att.mimeType)) continue
           if (previewable.some((f) => f.id === att.id)) continue
@@ -273,14 +281,13 @@ export const useDisplayStore = defineStore('display', {
       const textLen = message.content?.text?.length ?? 0
       const thoughtLen = message.runtime?.system?.thoughts?.rawText?.length ?? 0
       const attachLen = message.attachments?.length ?? 0
-      const indicatorCount = buildDisplayIndicators(message).length
       // We also need to consider UI flags that might change the group structure/content
       // Note: isCollapsed/shouldRender are injected AFTER group creation/retrieval,
       // so they don't strictly need to be in this key for the *inner* structure,
       // but if the provider logic depends on them, we might.
       // For now, we rely on the fact that isCollapsed/shouldRender are assigned purely in _syncFromMessages.
 
-      return `${message.id}|${message.updatedAt}|${message.status}|${textLen}|${thoughtLen}|${attachLen}|${indicatorCount}`
+      return `${message.id}|${message.updatedAt}|${message.status}|${textLen}|${thoughtLen}|${attachLen}`
     },
 
     async _buildMessageGroup(message) {

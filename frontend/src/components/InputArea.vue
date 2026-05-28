@@ -13,7 +13,15 @@
     <div class="input-area">
       <!-- Attachment Previews -->
       <div v-if="attachments.length > 0" class="attachment-previews">
-        <div v-for="file in attachments" :key="file.id" class="preview-card">
+        <div
+          v-for="file in attachments"
+          :key="file.id"
+          class="preview-card"
+          :class="{
+            expired: isExpired(file),
+            unsupported: isUnsupported(file),
+          }"
+        >
           <div class="preview-thumbnail">
             <img
               v-if="getThumbnailUrl(file)"
@@ -150,7 +158,32 @@ const isUploadingFiles = computed(() => {
   return attachments.value.some((file) => file.uploadProgress < 100)
 })
 
+const isExpired = (file) => {
+  if (!file.expirationTime) return false
+  return new Date(file.expirationTime) < new Date()
+}
+
+const unsupportedFileIds = computed(() => {
+  // Access store.currentModelCapabilities to establish dependency on active model policy
+  void store.currentModelCapabilities
+  const bucket = store.composerBucket
+  if (!bucket) return new Set()
+
+  const ids = new Set()
+  for (const file of bucket.items) {
+    if (bucket.isUnsupported?.(file)) {
+      ids.add(file.id)
+    }
+  }
+  return ids
+})
+
+const isUnsupported = (file) => {
+  return unsupportedFileIds.value.has(file.id)
+}
+
 const thumbnailManager = new BlobUrlManager()
+const thumbnailBlobRefs = new Map()
 
 const MAX_PROMPT_HEIGHT = 200
 
@@ -188,11 +221,20 @@ watch(
       keepIds.add(att.id)
 
       if (att.mimeType?.startsWith('image/') && att.blob) {
-        thumbnailManager.create(att.id, att.blob)
+        const previousBlob = thumbnailBlobRefs.get(att.id)
+        if (!thumbnailManager.has(att.id) || previousBlob !== att.blob) {
+          thumbnailManager.create(att.id, att.blob)
+          thumbnailBlobRefs.set(att.id, att.blob)
+        }
       }
     }
 
     thumbnailManager.cleanup(keepIds)
+    for (const id of thumbnailBlobRefs.keys()) {
+      if (!keepIds.has(id)) {
+        thumbnailBlobRefs.delete(id)
+      }
+    }
   },
   { deep: true, immediate: true }
 )
@@ -350,6 +392,7 @@ const resetPromptHeight = () => {
 onUnmounted(() => {
   resetPromptHeight()
   thumbnailManager.clear()
+  thumbnailBlobRefs.clear()
 })
 </script>
 
@@ -561,5 +604,13 @@ onUnmounted(() => {
 }
 .send-button.is-sending:hover {
   background-color: var(--danger-dark);
+}
+
+.preview-card.expired .preview-thumbnail,
+.preview-card.unsupported .preview-thumbnail,
+.preview-card.expired .preview-details,
+.preview-card.unsupported .preview-details {
+  opacity: 0.5;
+  filter: grayscale(80%);
 }
 </style>

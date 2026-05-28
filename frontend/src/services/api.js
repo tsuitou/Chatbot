@@ -73,7 +73,10 @@ export const getDefaultModel = async () => {
   }
 }
 
-export const uploadFile = async (file, onProgress) => {
+export const uploadFile = async (
+  file,
+  { model, providerId, onProgress } = {}
+) => {
   const formData = new FormData()
   formData.append('file', file)
 
@@ -82,12 +85,19 @@ export const uploadFile = async (file, onProgress) => {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      params: {
+        ...(model ? { model } : {}),
+        ...(providerId ? { provider: providerId } : {}),
+      },
       onUploadProgress: (progressEvent) => {
+        if (!Number.isFinite(progressEvent.total) || progressEvent.total <= 0) {
+          return
+        }
         const percentCompleted = Math.round(
           (progressEvent.loaded * 100) / progressEvent.total
         )
         if (typeof onProgress === 'function') {
-          onProgress(percentCompleted)
+          onProgress(Math.max(0, Math.min(100, percentCompleted)))
         }
       },
     })
