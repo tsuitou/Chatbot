@@ -20,7 +20,6 @@ import {
   createModelMessage,
   createUserMessage,
   hydrateMessages,
-  cloneConfigSnapshot,
   normalizeAttachments,
   prepareRequestMessages,
   prepareMessageForState,
@@ -1270,29 +1269,20 @@ export const useChatStore = defineStore('chat', {
 
       const chatConfigStore = useChatConfigStore()
 
-      // Identify configuration for resend
-      const fallbackConfig = cloneConfigSnapshot(target.configSnapshot) || {}
-      const currentConfig = this.currentRequestConfig || {}
-      const mergedTools = {
-        ...(fallbackConfig.tools || {}),
-        ...(currentConfig.tools || {}),
-      }
-      const streamingPreference =
-        currentConfig.streaming ??
-        fallbackConfig.streaming ??
-        this.composerState.streamingEnabled
-
-      const requestConfig = {
-        ...fallbackConfig,
-        ...currentConfig,
-        tools: mergedTools,
-        streaming: !!(streamingPreference ?? true),
-      }
+      let requestConfig = this.currentRequestConfig || {}
 
       if (!requestConfig.model) {
         showErrorToast('Please select a model before resending.')
         return
       }
+
+      await this.ensureModelCapabilities(
+        requestConfig.model,
+        requestConfig.providerId
+      )
+      if (!this._isActiveChat(chatId)) return
+      this._pruneToolsForCurrentModel()
+      requestConfig = this.currentRequestConfig || {}
 
       const sortedMessages = [...this.activeMessages].sort(
         (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)

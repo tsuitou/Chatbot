@@ -49,6 +49,48 @@
   },
   "models": [
     {
+      "modelQuery": "claude-opus-4-8",
+      "features": {
+        "adaptiveThinking": true,
+        "extendedThinking": false
+      },
+      "parameters": {
+        "temperature": null,
+        "topP": null,
+        "maxOutputTokens": {
+          "default": 128000,
+          "ui": { "range": { "min": 1, "max": 128000 } }
+        },
+        "thinkingBudget": {
+          "default": -1,
+          "ui": {
+            "type": "integer",
+            "label": "Thinking Mode",
+            "specialValues": [
+              { "label": "Disabled", "value": 0 },
+              { "label": "Adaptive", "value": -1 }
+            ]
+          },
+          "api": { "transform": "claudeThinking" }
+        },
+        "effort": {
+          "default": "high",
+          "ui": {
+            "type": "enum",
+            "label": "Effort",
+            "options": [
+              { "label": "Low", "value": "low" },
+              { "label": "Medium", "value": "medium" },
+              { "label": "High", "value": "high" },
+              { "label": "X High", "value": "xhigh" },
+              { "label": "Max", "value": "max" }
+            ]
+          },
+          "api": { "path": "output_config.effort" }
+        }
+      }
+    },
+    {
       "modelQuery": "claude-opus-4-7",
       "features": {
         "adaptiveThinking": true,
