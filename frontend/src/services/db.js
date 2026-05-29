@@ -997,15 +997,22 @@ export async function putModelSettings(settings) {
 }
 
 export async function getStorageUsage() {
-  const all = await getAllRecords()
+  // Iterate with a cursor instead of loading every record (including blobs) into
+  // memory at once, so usage can be computed without a large allocation spike.
+  const db = await dbPromise
+  const tx = db.transaction(STORE_NAME, 'readonly')
   let total = 0
-  for (const r of all) {
+  let cursor = await tx.store.openCursor()
+  while (cursor) {
+    const r = cursor.value
     if (r.type === TYPE_ATTACHMENT) {
       total += r.size ?? r.blob?.size ?? 0
     } else {
       total += JSON.stringify(r).length
     }
+    cursor = await cursor.continue()
   }
+  await tx.done
   return total
 }
 
@@ -1208,12 +1215,18 @@ export async function importArchive(file, opts = {}) {
     throw new Error(`manifest.json not found in the archive.${hint}`)
   }
   const manifest = JSON.parse(await manifestFile.async('string'))
+  if (!manifest || typeof manifest !== 'object' || !manifest.entities) {
+    throw new Error(
+      'Invalid archive: manifest is missing the "entities" section.'
+    )
+  }
 
-  const chats = manifest?.entities?.chats ?? []
-  const messages = manifest?.entities?.messages ?? []
-  const autoMessages = manifest?.entities?.autoMessages ?? []
-  const attachments = manifest?.entities?.attachments ?? []
-  const settings = manifest?.entities?.settings ?? []
+  const asArray = (value) => (Array.isArray(value) ? value : [])
+  const chats = asArray(manifest.entities.chats)
+  const messages = asArray(manifest.entities.messages)
+  const autoMessages = asArray(manifest.entities.autoMessages)
+  const attachments = asArray(manifest.entities.attachments)
+  const settings = asArray(manifest.entities.settings)
 
   opts.onProgress?.({
     phase: 'analyzing',
@@ -1250,7 +1263,8 @@ export async function importArchive(file, opts = {}) {
   for (let i = 0; i < attachments.length; i++) {
     const att = attachments[i]
     if (att.hasBlob && att.blobPath) {
-      att.blob = await zip.file(att.blobPath).async('blob')
+      const blobFile = zip.file(att.blobPath)
+      att.blob = blobFile ? await blobFile.async('blob') : null
     }
     opts.onProgress?.({
       phase: 'read:attachment',
@@ -1277,12 +1291,15 @@ export async function importArchive(file, opts = {}) {
 
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]
-    await store.put({
-      ...message,
-      id: mapMessage.get(message.id),
-      chatId: mapChat.get(message.chatId),
-      type: TYPE_MESSAGE,
-    })
+    const mappedChatId = mapChat.get(message.chatId)
+    if (mappedChatId) {
+      await store.put({
+        ...message,
+        id: mapMessage.get(message.id),
+        chatId: mappedChatId,
+        type: TYPE_MESSAGE,
+      })
+    }
     opts.onProgress?.({
       phase: 'write:message',
       current: i + 1,
@@ -1292,12 +1309,15 @@ export async function importArchive(file, opts = {}) {
 
   for (let i = 0; i < autoMessages.length; i++) {
     const autoMessage = autoMessages[i]
-    await store.put({
-      ...autoMessage,
-      id: mapAutoMessage.get(autoMessage.id),
-      chatId: mapChat.get(autoMessage.chatId),
-      type: TYPE_AUTO_MESSAGE,
-    })
+    const mappedChatId = mapChat.get(autoMessage.chatId)
+    if (mappedChatId) {
+      await store.put({
+        ...autoMessage,
+        id: mapAutoMessage.get(autoMessage.id),
+        chatId: mappedChatId,
+        type: TYPE_AUTO_MESSAGE,
+      })
+    }
     opts.onProgress?.({
       phase: 'write:autoMessage',
       current: i + 1,
@@ -1309,14 +1329,18 @@ export async function importArchive(file, opts = {}) {
     const att = attachments[i]
     // eslint-disable-next-line no-unused-vars
     const { blobPath, hasBlob, file, ...rest } = att
-    await store.put({
-      ...rest,
-      id: mapAttachment.get(att.id),
-      chatId: mapChat.get(att.chatId),
-      messageId:
-        mapMessage.get(att.messageId) || mapAutoMessage.get(att.messageId),
-      type: TYPE_ATTACHMENT,
-    })
+    const mappedChatId = mapChat.get(att.chatId)
+    const mappedMessageId =
+      mapMessage.get(att.messageId) || mapAutoMessage.get(att.messageId)
+    if (mappedChatId && mappedMessageId) {
+      await store.put({
+        ...rest,
+        id: mapAttachment.get(att.id),
+        chatId: mappedChatId,
+        messageId: mappedMessageId,
+        type: TYPE_ATTACHMENT,
+      })
+    }
     opts.onProgress?.({
       phase: 'write:attachment',
       current: i + 1,

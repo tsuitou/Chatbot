@@ -448,12 +448,12 @@ async function runDeepResearchInteraction({
     agent,
     input: userText,
     background: true,
-		stream: true,
+    stream: true,
     agent_config: {
       type: 'deep-research',
       thinking_summaries: 'auto',
       collaborative_planning: action !== 'run',
-			visualization: 'off',
+      visualization: 'off',
     },
   }
   if (previousInteractionId) {

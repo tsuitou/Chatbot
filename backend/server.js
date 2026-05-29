@@ -6,6 +6,7 @@ import multer from 'multer'
 import fs from 'fs'
 import path from 'path'
 import readline from 'readline'
+import os from 'os'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
@@ -77,6 +78,14 @@ const MAX_UPLOAD_FILE_SIZE = parseByteSize(
   process.env.MAX_UPLOAD_FILE_SIZE,
   10 * 1024 * 1024
 )
+// Socket.IO frames carry the whole request (history + base64-inline attachments),
+// so the buffer must exceed MAX_UPLOAD_FILE_SIZE: base64 inflates payloads by ~4/3
+// and the conversation history adds more on top. Default to that headroom and
+// allow an explicit override via MAX_SOCKET_BUFFER_SIZE.
+const MAX_SOCKET_BUFFER_SIZE = parseByteSize(
+  process.env.MAX_SOCKET_BUFFER_SIZE,
+  Math.ceil(MAX_UPLOAD_FILE_SIZE * (4 / 3)) + 2 * 1024 * 1024
+)
 
 // --- Config Loading ---
 let defaultSystemInstruction;
@@ -126,7 +135,7 @@ app.use(cors({
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: { origin: allowed.length ? allowed : '*' },
-  maxHttpBufferSize: 10 * 1024 * 1024,
+  maxHttpBufferSize: MAX_SOCKET_BUFFER_SIZE,
   path: SOCKET_PATH,
 })
 
@@ -196,9 +205,14 @@ function resolveProviderKeys() {
       const raw = fs.readFileSync(keyPath, 'utf-8').trim()
       const parsed = parseKeyFile(raw)
       if (hasProviderKey(parsed)) {
-        // Rename key to key_valid to prevent accidental distribution
+        // Rename key to key_valid to prevent accidental distribution.
         const validKeyPath = keyPath.replace(/key$/, 'key_valid')
         try {
+          // renameSync overwrites the destination on POSIX but throws on Windows
+          // when it already exists; remove it first for consistent behavior.
+          if (fs.existsSync(validKeyPath)) {
+            fs.rmSync(validKeyPath, { force: true })
+          }
           fs.renameSync(keyPath, validKeyPath)
           console.log(`Renamed ${path.basename(keyPath)} to ${path.basename(validKeyPath)} for security`)
         } catch (renameError) {
@@ -256,9 +270,28 @@ const providerRegistry = createProviderRegistry([
 
 const specialRegistry = createSpecialRegistry({ providerKeys })
 
-// Ensure uploads dir exists for Multer temp files
-const uploadsDir = path.resolve(runtimeDirname, 'uploads')
-fs.mkdirSync(uploadsDir, { recursive: true })
+// Ensure uploads dir exists for Multer temp files. In packaged (SEA) builds the
+// runtime dir may be read-only, so fall back to the OS temp dir.
+let uploadsDir = path.resolve(runtimeDirname, 'uploads')
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true })
+} catch (error) {
+  console.warn(
+    `Could not create uploads dir at ${uploadsDir}: ${error.message}. Falling back to OS temp dir.`
+  )
+  uploadsDir = path.join(os.tmpdir(), 'chatbot-uploads')
+  fs.mkdirSync(uploadsDir, { recursive: true })
+}
+
+// Best-effort cleanup of leftover temp files from a previous crash. Safe at
+// startup because no requests are in flight yet.
+try {
+  for (const entry of fs.readdirSync(uploadsDir)) {
+    try {
+      fs.unlinkSync(path.join(uploadsDir, entry))
+    } catch {}
+  }
+} catch {}
 
 const upload = multer({
   dest: uploadsDir,
@@ -474,14 +507,14 @@ if (staticDir) {
 
 // --- Socket.IO for generation ---
 io.on('connection', (socket) => {
-	updateConnectionInfo(socket.id, 'connected')
-	console.log(connectionInfo)
-	
+  updateConnectionInfo(socket.id, 'connected')
+  console.log(connectionInfo)
+
   socket.on("disconnect", () => {
-		updateConnectionInfo(socket.id, 'disconnect')
-		console.log(connectionInfo)
+    updateConnectionInfo(socket.id, 'disconnect')
+    console.log(connectionInfo)
   });
-	
+
   socket.on('start_generation', async (data) => {
     const {
       provider,
@@ -500,8 +533,8 @@ io.on('connection', (socket) => {
       const message = err?.message || 'generation failed'
       socket.emit('error', { error: message, message, status, chatId, requestId })
     }
-		updateConnectionInfo(socket.id, 'generating')
-		console.log(connectionInfo)
+    updateConnectionInfo(socket.id, 'generating')
+    console.log(connectionInfo)
     try {
       if (!modelName) throw new Error('model is required')
       
@@ -544,9 +577,9 @@ io.on('connection', (socket) => {
       console.error('generation error:', error?.status, error?.message)
       echoErr(error)
     } finally {
-			updateConnectionInfo(socket.id, 'connected')
-			console.log(connectionInfo)
-		}
+      updateConnectionInfo(socket.id, 'connected')
+      console.log(connectionInfo)
+    }
   })
 })
 

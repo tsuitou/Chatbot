@@ -89,7 +89,7 @@ export function eventFromParts({
     if (part?.inlineData) {
       const { mimeType, data } = part.inlineData
       attachments.push({
-        name: `generated_${Date.now()}`,
+        name: `generated_${Date.now()}_${idx}`,
         mimeType,
         data,
       })

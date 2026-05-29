@@ -66,7 +66,6 @@ async function buildCanonicalMessages(messages, options = {}) {
   }
   return result
 }
-
 export async function createApiRequest({
   chatId,
   messages = [],
@@ -125,4 +124,3 @@ export function parseApiResponse(rawChunk) {
   }
   return result
 }
-

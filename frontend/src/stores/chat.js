@@ -24,6 +24,7 @@ import {
   normalizeAttachments,
   prepareRequestMessages,
   prepareMessageForState,
+  isInvalidModelHistoryMessage,
   syncContentRuntimeFromMessage,
   setContentStreamingState,
   ensureContentRuntime,
@@ -569,6 +570,7 @@ export const useChatStore = defineStore('chat', {
           meta: cloneChatMeta(chatMeta),
           messages: hydrateMessages(messages),
         }
+        await this._reconcileInterruptedMessages()
         const chatConfigStore = useChatConfigStore()
         chatConfigStore.prepareForExistingChat(chatMeta.id, settings)
         chatConfigStore.loadAutoMessages(chatMeta.id, autoMessages)
@@ -800,33 +802,85 @@ export const useChatStore = defineStore('chat', {
       if (!this.isGenerating || !this.chatState.active) return
 
       const stream = this.generationState.stream
-      if (!stream?.messageId) {
-        this._setGenerationState(GenerationStatus.IDLE)
-        return
-      }
-
-      const message = this._findMessageById(stream.messageId)
-      if (!message) {
-        this._setGenerationState(GenerationStatus.IDLE)
-        return
-      }
-
-      message.status = 'cancelled'
-      message.content = { text: '' }
-      message.attachments = []
-      message.metadata = {}
-      message.requestId = null
-      if (message.runtime?.system?.thoughts) {
-        message.runtime.system.thoughts = {
-          rawText: '',
-          updatedAt: Date.now(),
-          isStreaming: false,
-        }
-      }
-      ensureContentRuntime(message).isReady = true
-
-      await this._persistActiveMessage(message)
+      const chatId = stream?.chatId || this.chatState.active.meta.id
+      // Flip to IDLE first so any late chunks for this request are ignored.
       this._setGenerationState(GenerationStatus.IDLE)
+
+      const messageId = stream?.messageId
+      if (!messageId) return
+
+      // The interrupted model message has no persisted content (partial deltas
+      // live only in memory), so drop it entirely instead of leaving an empty
+      // 'cancelled' record that would linger in the DB and pollute history.
+      await this._cleanupMessages(chatId, [messageId], {
+        warnPrefix: 'Failed to delete cancelled message',
+      })
+    },
+
+    async _cleanupMessages(chatId, messageIds, { warnPrefix } = {}) {
+      const ids = Array.isArray(messageIds) ? messageIds.filter(Boolean) : []
+      if (!chatId || !ids.length) return false
+
+      const isActiveChat = this.chatState.active?.meta?.id === chatId
+      if (isActiveChat) {
+        ids.forEach((id) => this._removeMessage(id))
+      }
+
+      try {
+        await db.deleteMessages(chatId, ids)
+      } catch (error) {
+        console.warn(warnPrefix || 'Failed to clean messages:', ids, error)
+        return false
+      }
+
+      if (isActiveChat) {
+        this._touchActiveChat()
+      }
+      return true
+    },
+
+    async _cleanupInvalidModelMessages(chatId) {
+      if (!chatId || this.chatState.active?.meta?.id !== chatId) return false
+
+      const invalidIds = this.chatState.active.messages
+        .filter(isInvalidModelHistoryMessage)
+        .map((message) => message.id)
+
+      if (!invalidIds.length) return false
+
+      return this._cleanupMessages(chatId, invalidIds, {
+        warnPrefix: 'Failed to clean interrupted messages',
+      })
+    },
+
+    async _cleanupStaleModelMessage(chatId, messageId) {
+      if (!chatId || !messageId) return false
+      return this._cleanupMessages(chatId, [messageId], {
+        warnPrefix: 'Failed to clean stale model message',
+      })
+    },
+
+    _isActiveChat(chatId) {
+      return !!chatId && this.chatState.active?.meta?.id === chatId
+    },
+
+    async _normalizeActiveHistory() {
+      const chatId = this.chatState.active?.meta?.id
+      if (!chatId) return
+      await this._cleanupInvalidModelMessages(chatId)
+    },
+
+    async _normalizeActiveHistoryForChat(chatId) {
+      if (!chatId || this.chatState.active?.meta?.id !== chatId) return false
+      return this._cleanupInvalidModelMessages(chatId)
+    },
+
+    async _reconcileInterruptedMessages() {
+      try {
+        await this._normalizeActiveHistory()
+      } catch (error) {
+        console.warn('Failed to reconcile interrupted messages:', error)
+      }
     },
 
     startEditing(messageId) {
@@ -1039,6 +1093,7 @@ export const useChatStore = defineStore('chat', {
 
       // Update UI state
       this._setGenerationState(GenerationStatus.STREAMING, {
+        chatId,
         messageId: modelMessage.id,
         requestId,
         providerId: requestConfig.providerId,
@@ -1072,6 +1127,7 @@ export const useChatStore = defineStore('chat', {
           trackedMessage.status !== 'streaming' ||
           trackedMessage.requestId !== requestId
         ) {
+          await this._cleanupStaleModelMessage(chatId, modelMessage.id)
           return
         }
 
@@ -1083,16 +1139,7 @@ export const useChatStore = defineStore('chat', {
 
         // Cleanup model message on immediate failure
         this._setGenerationState(GenerationStatus.ERROR, null, error)
-        this._removeMessage(modelMessage.id)
-        try {
-          await db.deleteMessage(chatId, modelMessage.id)
-        } catch (cleanupError) {
-          console.warn(
-            'Cleanup failed for message',
-            modelMessage.id,
-            cleanupError
-          )
-        }
+        await this._cleanupStaleModelMessage(chatId, modelMessage.id)
       }
     },
 
@@ -1126,10 +1173,13 @@ export const useChatStore = defineStore('chat', {
         (item) => !this.composerState.attachmentBucket.isUnsupported?.(item)
       )
       const tempMessageIds = []
+      let chatId = null
 
       try {
-        const chatId = await this.ensureActiveChat(prompt)
+        chatId = await this.ensureActiveChat(prompt)
         if (!chatId) throw new Error('Active chat not available')
+        await this._normalizeActiveHistoryForChat(chatId)
+        if (!this._isActiveChat(chatId)) return
 
         const messages = this.activeMessages
         const userSequence = nextSequence(messages)
@@ -1144,6 +1194,12 @@ export const useChatStore = defineStore('chat', {
 
         await db.saveMessage(chatId, userMessage)
         tempMessageIds.push(userMessage.id)
+        if (!this._isActiveChat(chatId)) {
+          await this._cleanupMessages(chatId, tempMessageIds, {
+            warnPrefix: 'Failed to clean abandoned setup messages',
+          })
+          return
+        }
         this._appendMessage(userMessage)
 
         const modelSequence = nextSequence(this.activeMessages)
@@ -1157,6 +1213,12 @@ export const useChatStore = defineStore('chat', {
 
         await db.saveMessage(chatId, modelMessage)
         tempMessageIds.push(modelMessage.id)
+        if (!this._isActiveChat(chatId)) {
+          await this._cleanupMessages(chatId, tempMessageIds, {
+            warnPrefix: 'Failed to clean abandoned setup messages',
+          })
+          return
+        }
         this._appendMessage(modelMessage)
 
         // Clear composer
@@ -1184,22 +1246,28 @@ export const useChatStore = defineStore('chat', {
         showErrorToast('Failed to setup message. Please try again.')
         this._setGenerationState(GenerationStatus.ERROR, null, error)
 
-        if (this.chatState.active?.meta?.id && tempMessageIds.length) {
-          await this.deleteMessages(tempMessageIds)
+        if (chatId && tempMessageIds.length) {
+          await this._cleanupMessages(chatId, tempMessageIds, {
+            warnPrefix: 'Failed to clean setup messages',
+          })
         }
       }
     },
 
     async resendMessage(messageId) {
       if (!this.chatState.active) return
-      let target = this._findMessageById(messageId)
-      if (!target) return
 
       if (this.isGenerating) {
         await this.cancelGeneration()
       }
 
       const chatId = this.chatState.active.meta.id
+      await this._normalizeActiveHistoryForChat(chatId)
+      if (!this._isActiveChat(chatId)) return
+
+      const target = this._findMessageById(messageId)
+      if (!target) return
+
       const chatConfigStore = useChatConfigStore()
 
       // Identify configuration for resend
@@ -1241,8 +1309,11 @@ export const useChatStore = defineStore('chat', {
       try {
         // Batch delete from DB and State
         if (pruneIds.length) {
-          await this.deleteMessages(pruneIds)
+          await this._cleanupMessages(chatId, pruneIds, {
+            warnPrefix: 'Failed to prune resend messages',
+          })
         }
+        if (!this._isActiveChat(chatId)) return
 
         // Re-sort and touch chat
         sortMessagesBySequence(this.activeMessages)
@@ -1314,6 +1385,10 @@ export const useChatStore = defineStore('chat', {
         prepareMessageForState(responseMessage)
 
         await db.saveMessage(chatId, responseMessage)
+        if (!this._isActiveChat(chatId)) {
+          await this._cleanupStaleModelMessage(chatId, responseMessage.id)
+          return
+        }
         this._appendMessage(responseMessage)
 
         await this._executeGeneration({

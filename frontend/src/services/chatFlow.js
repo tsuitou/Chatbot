@@ -239,15 +239,19 @@ function prepareMessageForState(raw) {
   return normalized
 }
 
-// Deprecated alias, keeping for backward compat if needed during refactor
-const hydrateMessage = prepareMessageForState
-
 function hydrateMessages(list) {
   if (!Array.isArray(list)) return []
   return list
     .map(prepareMessageForState)
     .filter(Boolean)
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
+}
+
+function isInvalidModelHistoryMessage(message) {
+  return (
+    message?.sender === 'model' &&
+    ['pending', 'streaming', 'cancelled'].includes(message.status)
+  )
 }
 
 function prepareRequestMessages({
@@ -263,7 +267,12 @@ function prepareRequestMessages({
     location: 'post',
     userSequence: anchorSequence,
   })
-  return [...preAuto, ...historyMessages, ...postAuto]
+  // Interrupted model messages carry no persisted usable content, so keep them
+  // out of the request history sent to the provider.
+  const history = (historyMessages || []).filter(
+    (message) => !isInvalidModelHistoryMessage(message)
+  )
+  return [...preAuto, ...history, ...postAuto]
 }
 
 export {
@@ -273,7 +282,7 @@ export {
   createInitialRuntime,
   createModelMessage,
   createUserMessage,
-  hydrateMessage, // Deprecated but exported for safety
+  isInvalidModelHistoryMessage,
   prepareMessageForState,
   hydrateMessages,
   normalizeAttachments,

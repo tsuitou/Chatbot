@@ -22,6 +22,8 @@ const isDebugPanelEnabled = DEBUG_PANEL_ENABLED
 
 const handleBeforeUnload = () => {
   if (chatStore.isGenerating) {
+    // IndexedDB cleanup is best-effort during unload; any unfinished model
+    // records are reconciled next time the chat is loaded or used.
     void chatStore.cancelGeneration()
   }
 }
