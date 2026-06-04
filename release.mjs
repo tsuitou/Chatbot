@@ -79,7 +79,7 @@ async function main() {
     // 5. keyファイルのひな型を作成
     await fs.writeFile(
       path.join(tempDir, 'key'),
-      `${JSON.stringify({ gemini: '', claude: '' }, null, 2)}\n`,
+      `${JSON.stringify({ gemini: '', claude: '', openrouter: '' }, null, 2)}\n`,
       'utf8'
     )
     console.log('Created key template')

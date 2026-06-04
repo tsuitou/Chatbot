@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { ClaudeProvider } from './providers/claude.js'
+import { OpenRouterProvider } from './providers/openrouter.js'
 import { createProviderRegistry } from './providers/registry.js'
 import { createSpecialRegistry } from './specialModels.js'
 import { makeResolveFirstExisting } from './utils.js'
@@ -112,6 +113,10 @@ function applyReloadedConfig() {
     defaultSystemInstruction,
     systemInstructionMode
   )
+  openrouterProvider?.setDefaultSystemInstruction(
+    defaultSystemInstruction,
+    systemInstructionMode
+  )
 }
 
 // --- Init ---
@@ -148,22 +153,25 @@ function parseKeyFile(raw) {
       return {
         gemini: String(parsed.gemini || '').trim(),
         claude: String(parsed.claude || parsed.anthropic || '').trim(),
+        openrouter: String(parsed.openrouter || '').trim(),
       }
     }
   } catch {}
   // Plain text: auto-detect provider by key prefix
+  if (trimmed.startsWith('sk-or-')) return { openrouter: trimmed }
   if (trimmed.startsWith('sk-ant-')) return { claude: trimmed }
   return { gemini: trimmed }
 }
 
 function hasProviderKey(keys) {
-  return Boolean(keys?.gemini || keys?.claude)
+  return Boolean(keys?.gemini || keys?.claude || keys?.openrouter)
 }
 
 function resolveProviderKeys() {
   const keys = {
     gemini: '',
     claude: '',
+    openrouter: '',
   }
 
   // First check for key_valid files in cwd and runtimeDirname (do not go up directories)
@@ -183,6 +191,7 @@ function resolveProviderKeys() {
       const parsed = parseKeyFile(fs.readFileSync(keyPath, 'utf-8'))
       keys.gemini ||= parsed.gemini || ''
       keys.claude ||= parsed.claude || ''
+      keys.openrouter ||= parsed.openrouter || ''
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
     }
@@ -220,6 +229,7 @@ function resolveProviderKeys() {
         }
         keys.gemini ||= parsed.gemini || ''
         keys.claude ||= parsed.claude || ''
+        keys.openrouter ||= parsed.openrouter || ''
       }
     } catch (error) {
       console.warn(`Failed to read API key from ${keyPath}:`, error)
@@ -230,13 +240,13 @@ function resolveProviderKeys() {
 }
 
 const providerKeys = resolveProviderKeys()
-if (!providerKeys.gemini && !providerKeys.claude) {
+if (!providerKeys.gemini && !providerKeys.claude && !providerKeys.openrouter) {
   console.error('\n======================================================================')
   console.error('❌ Error: No provider API key found!')
   console.error('Please configure at least one API key using the following method:')
   console.error('Place a "key" file containing your API key(s) in the execution directory.')
   console.error('Format (JSON or text):')
-  console.error('  JSON:  {"gemini": "YOUR_GEMINI_KEY", "claude": "YOUR_CLAUDE_KEY"}')
+  console.error('  JSON:  {"gemini": "YOUR_GEMINI_KEY", "claude": "YOUR_CLAUDE_KEY", "openrouter": "YOUR_OPENROUTER_KEY"}')
   console.error('  Plain: YOUR_GEMINI_KEY')
   console.error('======================================================================\n')
   process.exit(1)
@@ -251,6 +261,7 @@ const connectionInfo = {}
 // Initialize Provider
 const geminiCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
 const claudeCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'claude.json'), 'file')
+const openrouterCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'openrouter.json'), 'file')
 const geminiProvider = providerKeys.gemini
   ? new GeminiProvider(providerKeys.gemini, defaultSystemInstruction, {
       capabilitiesPath: geminiCapabilitiesPath,
@@ -263,9 +274,19 @@ const claudeProvider = providerKeys.claude
       systemInstructionMode,
     })
   : null
+const openrouterProvider = providerKeys.openrouter
+  ? new OpenRouterProvider(providerKeys.openrouter, defaultSystemInstruction, {
+      capabilitiesPath: openrouterCapabilitiesPath,
+      systemInstructionMode,
+      appUrl: process.env.OPENROUTER_APP_URL,
+      appTitle: process.env.OPENROUTER_APP_TITLE,
+      models: process.env.OPENROUTER_MODELS,
+    })
+  : null
 const providerRegistry = createProviderRegistry([
   { id: 'gemini', provider: geminiProvider },
   { id: 'claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
+  { id: 'openrouter', provider: openrouterProvider, modelPrefixes: [] },
 ])
 
 const specialRegistry = createSpecialRegistry({ providerKeys })
