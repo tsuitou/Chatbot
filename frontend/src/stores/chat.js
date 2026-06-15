@@ -213,6 +213,7 @@ export const useChatStore = defineStore('chat', {
         tools,
         attachments: this.currentModelCapabilities.attachments || {},
         parameters: { ...settings.parameters },
+        routing: { ...settings.routing },
         systemInstruction,
         streaming,
       }

@@ -18,6 +18,7 @@ const runtimeFilename = fileURLToPath(import.meta.url)
 const runtimeDirname = path.dirname(runtimeFilename)
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+const OPENROUTER_ORIGIN = 'https://openrouter.ai'
 const MODELS_CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes
 
 // Maps capability parameter keys to the OpenRouter `supported_parameters`
@@ -120,6 +121,197 @@ function applyOpenRouterModelMetadata(base, meta) {
     }
   }
 
+  return base
+}
+
+function normalizeProviderSlug(value) {
+  if (value === null || value === undefined) return ''
+  if (!['string', 'number'].includes(typeof value)) return ''
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+}
+
+function normalizeProviderName(value) {
+  if (value === null || value === undefined) return ''
+  if (!['string', 'number'].includes(typeof value)) return ''
+  return String(value || '').trim()
+}
+
+function normalizePriceValue(value) {
+  if (value === undefined || value === null || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function normalizePricing(pricing) {
+  if (!pricing || typeof pricing !== 'object') return null
+  const result = {}
+  for (const [key, value] of Object.entries(pricing)) {
+    const normalized = normalizePriceValue(value)
+    if (normalized !== null) result[key] = normalized
+  }
+  return Object.keys(result).length ? result : null
+}
+
+function normalizeOptionalNumber(value) {
+  if (value === undefined || value === null || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function firstValue(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value
+  }
+  return null
+}
+
+function normalizeOpenRouterProviderRouting(raw) {
+  const provider = raw?.provider && typeof raw.provider === 'object' ? raw.provider : {}
+  const result = {}
+
+  if (Array.isArray(provider.only)) {
+    result.only = provider.only.map(normalizeProviderSlug).filter(Boolean)
+  }
+  if (Array.isArray(provider.order)) {
+    result.order = provider.order.map(normalizeProviderSlug).filter(Boolean)
+  }
+  if (Array.isArray(provider.ignore)) {
+    result.ignore = provider.ignore.map(normalizeProviderSlug).filter(Boolean)
+  }
+  if (Array.isArray(provider.quantizations)) {
+    result.quantizations = provider.quantizations
+      .map(String)
+      .map((v) => v.trim())
+      .filter(Boolean)
+  }
+  if (typeof provider.allow_fallbacks === 'boolean') {
+    result.allow_fallbacks = provider.allow_fallbacks
+  }
+  if (typeof provider.require_parameters === 'boolean') {
+    result.require_parameters = provider.require_parameters
+  }
+  if (typeof provider.data_collection === 'string') {
+    const value = provider.data_collection.trim()
+    if (value === 'allow' || value === 'deny') result.data_collection = value
+  }
+  if (typeof provider.zdr === 'boolean') result.zdr = provider.zdr
+  if (typeof provider.enforce_distillable_text === 'boolean') {
+    result.enforce_distillable_text = provider.enforce_distillable_text
+  }
+  if (typeof provider.sort === 'string' && provider.sort.trim()) {
+    result.sort = provider.sort.trim()
+  } else if (provider.sort && typeof provider.sort === 'object') {
+    result.sort = provider.sort
+  }
+  if (provider.max_price && typeof provider.max_price === 'object') {
+    result.max_price = provider.max_price
+  }
+
+  for (const key of Object.keys(result)) {
+    if (Array.isArray(result[key]) && result[key].length === 0) delete result[key]
+  }
+  return Object.keys(result).length ? result : null
+}
+
+function endpointProviderSlug(endpoint) {
+  return (
+    normalizeProviderSlug(endpoint?.provider_slug) ||
+    normalizeProviderSlug(endpoint?.provider_id) ||
+    normalizeProviderSlug(endpoint?.provider?.slug) ||
+    normalizeProviderSlug(endpoint?.provider?.id) ||
+    normalizeProviderSlug(endpoint?.provider_name) ||
+    normalizeProviderSlug(endpoint?.provider) ||
+    normalizeProviderSlug(endpoint?.name)
+  )
+}
+
+function endpointProviderLabel(endpoint, slug) {
+  return (
+    normalizeProviderName(endpoint?.provider?.name) ||
+    normalizeProviderName(endpoint?.provider_label) ||
+    normalizeProviderName(endpoint?.provider_name) ||
+    normalizeProviderName(endpoint?.provider) ||
+    normalizeProviderName(endpoint?.name) ||
+    slug
+  )
+}
+
+function buildRoutingOptionFromEndpoint(endpoint) {
+  const id = endpointProviderSlug(endpoint)
+  if (!id) return null
+  return {
+    id,
+    label: endpointProviderLabel(endpoint, id),
+    pricing: normalizePricing(endpoint.pricing),
+    contextLength:
+      endpoint.context_length ??
+      endpoint.contextLength ??
+      endpoint.top_provider?.context_length ??
+      null,
+    maxCompletionTokens:
+      endpoint.max_completion_tokens ??
+      endpoint.maxCompletionTokens ??
+      endpoint.top_provider?.max_completion_tokens ??
+      null,
+    throughput: normalizeOptionalNumber(
+      firstValue(
+        endpoint.throughput,
+        endpoint.performance?.throughput,
+        endpoint.performance?.tokens_per_second,
+        endpoint.metrics?.throughput,
+        endpoint.metrics?.tokens_per_second
+      )
+    ),
+    precision: firstValue(
+      endpoint.precision,
+      endpoint.quantization,
+      endpoint.variant?.precision,
+      endpoint.variant?.quantization,
+      endpoint.top_provider?.precision,
+      endpoint.top_provider?.quantization
+    ),
+    quantization: firstValue(endpoint.quantization, endpoint.variant?.quantization),
+    status: endpoint.status ?? null,
+  }
+}
+
+function buildRoutingOptionFromModel(meta) {
+  if (!meta) return null
+  const slug = normalizeProviderSlug(meta.top_provider?.provider_name)
+  if (!slug) return null
+  return {
+    id: slug,
+    label: endpointProviderLabel(meta.top_provider, slug),
+    pricing: normalizePricing(meta.pricing),
+    contextLength: meta.top_provider?.context_length ?? meta.context_length ?? null,
+    maxCompletionTokens: meta.top_provider?.max_completion_tokens ?? null,
+    throughput: normalizeOptionalNumber(
+      firstValue(
+        meta.top_provider?.throughput,
+        meta.top_provider?.tokens_per_second,
+        meta.performance?.throughput,
+        meta.performance?.tokens_per_second
+      )
+    ),
+    precision: firstValue(meta.top_provider?.precision, meta.top_provider?.quantization),
+    quantization: meta.top_provider?.quantization ?? null,
+    status: null,
+  }
+}
+
+function applyRoutingCapabilities(base, options) {
+  const normalized = Array.isArray(options) ? options.filter(Boolean) : []
+  if (!normalized.length) return base
+  base.routing = {
+    ...(base.routing || {}),
+    providerSelection: {
+      enabled: true,
+      options: normalized,
+    },
+  }
   return base
 }
 
@@ -242,9 +434,11 @@ export class OpenRouterProvider {
   _buildRequest(request) {
     const { config, system } = this._buildConfig(request.model, request)
     const messages = this._buildMessages(request.messages, system)
+    const providerRouting = normalizeOpenRouterProviderRouting(request.routing)
     return {
       model: request.model,
       messages,
+      ...(providerRouting ? { provider: providerRouting } : {}),
       ...config,
     }
   }
@@ -346,6 +540,50 @@ export class OpenRouterProvider {
     }
   }
 
+  async _getModelProviderOptions(modelName, meta) {
+    const detailsPath = meta?.links?.details
+    if (!detailsPath) {
+      const fallback = buildRoutingOptionFromModel(meta)
+      return fallback ? [fallback] : []
+    }
+
+    try {
+      const url = detailsPath.startsWith('http')
+        ? detailsPath
+        : `${OPENROUTER_ORIGIN}${
+            detailsPath.startsWith('/') ? detailsPath : `/${detailsPath}`
+          }`
+      const response = await fetch(url)
+      if (!response.ok) {
+        throw new Error(`OpenRouter endpoints request failed: ${response.status}`)
+      }
+      const payload = await response.json()
+      const endpoints = Array.isArray(payload?.data?.endpoints)
+        ? payload.data.endpoints
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(payload?.endpoints)
+            ? payload.endpoints
+            : []
+      const byId = new Map()
+      for (const endpoint of endpoints) {
+        const option = buildRoutingOptionFromEndpoint(endpoint)
+        if (!option) continue
+        const existing = byId.get(option.id)
+        if (!existing || (!existing.pricing && option.pricing)) {
+          byId.set(option.id, option)
+        }
+      }
+      const options = [...byId.values()]
+      if (options.length) return options
+    } catch {
+      // Provider details are best-effort; fall back to model-level metadata.
+    }
+
+    const fallback = buildRoutingOptionFromModel(meta)
+    return fallback ? [fallback] : []
+  }
+
   async listModels() {
     let cache = null
     try {
@@ -363,6 +601,8 @@ export class OpenRouterProvider {
   async getModelCapabilities(modelName) {
     const base = buildModelCapabilities(this.capabilities, modelName)
     const meta = await this._getModelMetadata(modelName)
-    return applyOpenRouterModelMetadata(base, meta)
+    const withMetadata = applyOpenRouterModelMetadata(base, meta)
+    const options = await this._getModelProviderOptions(modelName, meta)
+    return applyRoutingCapabilities(withMetadata, options)
   }
 }

@@ -42,6 +42,69 @@
             </select>
           </fieldset>
 
+          <fieldset v-if="supportsProviderRouting" class="form-section">
+            <legend class="field-legend">Provider Routing</legend>
+            <div class="settings-grid">
+              <div class="form-field">
+                <label class="form-label" for="provider-routing-select"
+                  >Provider</label
+                >
+                <select
+                  id="provider-routing-select"
+                  v-model="currentSettings.routing.providerChoice"
+                  class="select-input"
+                >
+                  <option value="">Auto</option>
+                  <option
+                    v-for="option in providerRoutingOptions"
+                    :key="option.id"
+                    :value="option.id"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </div>
+
+              <label class="checkbox-field provider-routing-checkbox">
+                <input v-model="allowFallbacksModel" type="checkbox" />
+                <span>Allow fallback providers</span>
+              </label>
+            </div>
+
+            <div class="provider-details">
+              <div class="provider-detail-row">
+                <span>Provider</span>
+                <strong>{{ selectedProviderDetails.label }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Prompt</span>
+                <strong>{{ selectedProviderDetails.promptPrice }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Completion</span>
+                <strong>{{ selectedProviderDetails.completionPrice }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Context</span>
+                <strong>{{ selectedProviderDetails.contextLength }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Max output</span>
+                <strong>{{
+                  selectedProviderDetails.maxCompletionTokens
+                }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Throughput</span>
+                <strong>{{ selectedProviderDetails.throughput }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Precision</span>
+                <strong>{{ selectedProviderDetails.precision }}</strong>
+              </div>
+            </div>
+          </fieldset>
+
           <fieldset v-if="dynamicParameters.length" class="form-section">
             <legend class="field-legend">Generation Parameters</legend>
             <div class="settings-grid">
@@ -233,6 +296,87 @@ const fetchCapabilitiesForModel = async (modelName) => {
 
 const dynamicParameters = computed(() => {
   return normalizeDynamicParameters(modelCapabilities.value)
+})
+
+const providerRoutingOptions = computed(() => {
+  const options =
+    modelCapabilities.value?.routing?.providerSelection?.options || []
+  return Array.isArray(options)
+    ? options.filter((option) => option?.id && option?.label)
+    : []
+})
+
+const supportsProviderRouting = computed(() => {
+  return providerRoutingOptions.value.length > 0
+})
+
+const allowFallbacksModel = computed({
+  get() {
+    return currentSettings.value.routing?.allowFallbacks !== false
+  },
+  set(value) {
+    currentSettings.value.routing = {
+      ...(currentSettings.value.routing || {}),
+      allowFallbacks: Boolean(value),
+    }
+  },
+})
+
+const selectedProviderOption = computed(() => {
+  const selected = currentSettings.value.routing?.providerChoice || ''
+  if (!selected) return null
+  return (
+    providerRoutingOptions.value.find((option) => option.id === selected) ||
+    null
+  )
+})
+
+const formatNumber = (value) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 'Default'
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 8,
+  }).format(number)
+}
+
+const formatPrice = (value) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 'Default'
+  return `$${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 8,
+  }).format(number)} / token`
+}
+
+const formatThroughput = (value) => {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 'Default'
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+  }).format(number)} tok/s`
+}
+
+const selectedProviderDetails = computed(() => {
+  const option = selectedProviderOption.value
+  if (!option) {
+    return {
+      label: 'Auto',
+      promptPrice: 'OpenRouter default',
+      completionPrice: 'OpenRouter default',
+      contextLength: 'Model default',
+      maxCompletionTokens: 'Model default',
+      throughput: 'Provider default',
+      precision: 'Provider default',
+    }
+  }
+  return {
+    label: option.label || option.id,
+    promptPrice: formatPrice(option.pricing?.prompt),
+    completionPrice: formatPrice(option.pricing?.completion),
+    contextLength: formatNumber(option.contextLength),
+    maxCompletionTokens: formatNumber(option.maxCompletionTokens),
+    throughput: formatThroughput(option.throughput),
+    precision: option.precision || 'Default',
+  }
 })
 
 const supportsSystemInstruction = computed(() => {
@@ -492,6 +636,51 @@ const reset = () => {
   margin: 0;
   flex: none;
   accent-color: var(--primary-color);
+}
+
+.provider-routing-checkbox {
+  align-self: end;
+  min-height: 40px;
+}
+
+.provider-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  background-color: var(--bg-light);
+}
+
+.provider-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.provider-detail-row:last-child {
+  border-bottom: none;
+}
+
+.provider-detail-row span {
+  color: var(--text-light);
+}
+
+.provider-detail-row strong {
+  color: var(--text-color);
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .provider-details {
+    grid-template-columns: 1fr;
+  }
 }
 
 .modal-footer {

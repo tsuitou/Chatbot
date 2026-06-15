@@ -66,6 +66,24 @@ async function buildCanonicalMessages(messages, options = {}) {
   }
   return result
 }
+
+function buildRoutingPayload(routing = {}) {
+  const provider = {}
+  const choice =
+    typeof routing.providerChoice === 'string'
+      ? routing.providerChoice.trim()
+      : ''
+  if (choice) provider.only = [choice]
+  if (typeof routing.allowFallbacks === 'boolean') {
+    provider.allow_fallbacks = routing.allowFallbacks
+  }
+  if (typeof routing.requireParameters === 'boolean') {
+    provider.require_parameters = routing.requireParameters
+  }
+
+  return Object.keys(provider).length ? { provider } : {}
+}
+
 export async function createApiRequest({
   chatId,
   messages = [],
@@ -93,6 +111,7 @@ export async function createApiRequest({
     messages: await buildCanonicalMessages(sorted, { allowRemoteUpload }),
     parameters: { ...(requestConfig.parameters || {}) },
     tools: { ...(requestConfig.tools || {}) },
+    routing: buildRoutingPayload(requestConfig.routing),
     systemInstruction: requestConfig.systemInstruction || '',
     streaming,
   }

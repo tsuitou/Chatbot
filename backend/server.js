@@ -542,6 +542,7 @@ io.on('connection', (socket) => {
       messages,
       model: modelName,
       parameters,
+      routing,
       tools,
       systemInstruction,
       streaming,
@@ -580,6 +581,7 @@ io.on('connection', (socket) => {
         model: modelName,
         messages,
         parameters: parameters || {},
+        routing: routing || {},
         tools: tools || {},
         systemInstruction: systemInstruction || '',
       }

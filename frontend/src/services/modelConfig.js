@@ -5,6 +5,7 @@ export function createEmptySettings() {
   return {
     providerId: null,
     parameters: {},
+    routing: {},
     systemPrompt: '',
   }
 }
@@ -27,6 +28,23 @@ function normalizeParameters(raw) {
   return next
 }
 
+function normalizeProviderRouting(raw) {
+  const source =
+    raw?.routing && typeof raw.routing === 'object' ? raw.routing : raw
+  if (!source || typeof source !== 'object') return {}
+
+  const providerChoice =
+    typeof source.providerChoice === 'string'
+      ? source.providerChoice.trim()
+      : ''
+  const routing = {}
+  if (providerChoice) routing.providerChoice = providerChoice
+  if (typeof source.allowFallbacks === 'boolean') {
+    routing.allowFallbacks = source.allowFallbacks
+  }
+  return Object.keys(routing).length ? routing : {}
+}
+
 /**
  * Normalize a settings entry loaded from storage into the canonical structure.
  * Falls back to empty settings if the input is invalid.
@@ -40,6 +58,7 @@ export function normalizeSettingsEntry(raw) {
 
   normalized.providerId = raw.providerId ?? null
   normalized.parameters = normalizeParameters(raw)
+  normalized.routing = normalizeProviderRouting(raw)
   normalized.systemPrompt =
     typeof raw.systemPrompt === 'string' ? raw.systemPrompt : ''
 
@@ -54,6 +73,7 @@ export function cloneSettings(settings) {
   return {
     providerId: settings.providerId ?? null,
     parameters: settings.parameters ? { ...settings.parameters } : {},
+    routing: normalizeProviderRouting(settings),
     systemPrompt: settings.systemPrompt ?? '',
   }
 }
@@ -66,6 +86,7 @@ export function serializeSettings(settings) {
   const payload = {
     providerId: normalized.providerId ?? null,
     parameters: {},
+    routing: normalizeProviderRouting(normalized),
     systemPrompt: normalized.systemPrompt ?? '',
   }
 
@@ -79,6 +100,9 @@ export function serializeSettings(settings) {
   }
   if (!Object.keys(payload.parameters).length) {
     delete payload.parameters
+  }
+  if (!Object.keys(payload.routing).length) {
+    delete payload.routing
   }
   if (!payload.providerId) {
     delete payload.providerId
