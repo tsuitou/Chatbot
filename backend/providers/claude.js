@@ -2,8 +2,10 @@ import Anthropic from '@anthropic-ai/sdk'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import {
-  buildModelCapabilities,
-  getEffectiveCapabilities,
+  applyCapabilityModelOverride,
+  buildModelCapabilitiesFromEffective,
+  findCapabilityModelOverride,
+  getDefaultCapabilities,
   loadCapabilities,
 } from './capabilities.js'
 import { buildProviderConfig } from './configBuilder.js'
@@ -22,6 +24,156 @@ const runtimeDirname = path.dirname(runtimeFilename)
 // definition omits maxOutputTokens (every listed model sets it).
 const CLAUDE_MIN_THINKING_BUDGET = 1024
 const CLAUDE_DEFAULT_MAX_TOKENS = 64000
+const MODELS_CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes
+const CLAUDE_IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const CLAUDE_DOCUMENT_MIMES = ['application/pdf', 'text/plain']
+const EFFORT_LEVELS = [
+  ['low', 'Low'],
+  ['medium', 'Medium'],
+  ['high', 'High'],
+  ['xhigh', 'X High'],
+  ['max', 'Max'],
+]
+
+function isSupported(value) {
+  return value?.supported === true
+}
+
+function positiveInteger(value) {
+  const number = Number(value)
+  return Number.isInteger(number) && number > 0 ? number : null
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function mergeAllowedMimes(attachments, mimes) {
+  if (!mimes.length) return attachments
+  return {
+    ...(attachments || {}),
+    enabled: true,
+    allowRemoteUpload: false,
+    allowedMimes: unique([...(attachments?.allowedMimes || []), ...mimes]),
+  }
+}
+
+function buildThinkingParameter(meta, maxOutputTokens) {
+  const thinking = meta?.capabilities?.thinking
+  if (!isSupported(thinking)) return null
+
+  const specialValues = [{ label: 'Disabled', value: 0 }]
+  if (isSupported(thinking.types?.adaptive)) {
+    specialValues.push({ label: 'Adaptive', value: -1 })
+  }
+
+  const rangeMax = positiveInteger(maxOutputTokens)
+  return {
+    default: 'max',
+    ui: {
+      type: 'integer',
+      label: 'Thinking Budget',
+      ...(isSupported(thinking.types?.enabled) && rangeMax
+        ? {
+            range: {
+              min: CLAUDE_MIN_THINKING_BUDGET,
+              max: Math.max(CLAUDE_MIN_THINKING_BUDGET, rangeMax - 1),
+              step: 256,
+            },
+          }
+        : {}),
+      specialValues,
+    },
+    api: { transform: 'claudeThinking' },
+  }
+}
+
+function buildEffortParameter(meta) {
+  const effort = meta?.capabilities?.effort
+  if (!isSupported(effort)) return null
+
+  const options = EFFORT_LEVELS
+    .filter(([key]) => isSupported(effort[key]))
+    .map(([value, label]) => ({ value, label }))
+
+  if (!options.length) return null
+  return {
+    ui: {
+      type: 'enum',
+      label: 'Effort',
+      options,
+    },
+    api: { path: 'output_config.effort' },
+  }
+}
+
+function applyClaudeModelMetadata(effective, meta) {
+  if (!effective || !meta) return effective
+
+  const capabilities = meta.capabilities || {}
+  const maxOutputTokens = positiveInteger(meta.max_tokens)
+  const fallbackMaxOutputTokens = positiveInteger(
+    effective.parameters?.maxOutputTokens?.ui?.range?.max
+  )
+  const thinkingMaxOutputTokens = maxOutputTokens || fallbackMaxOutputTokens
+  const maxInputTokens = positiveInteger(meta.max_input_tokens)
+  const parameters = { ...(effective.parameters || {}) }
+  const features = {
+    ...(effective.features || {}),
+    batch: isSupported(capabilities.batch),
+    citations: isSupported(capabilities.citations),
+    codeExecution: isSupported(capabilities.code_execution),
+    contextManagement: isSupported(capabilities.context_management),
+    structuredOutputs: isSupported(capabilities.structured_outputs),
+    extendedThinking: isSupported(capabilities.thinking),
+    adaptiveThinking: isSupported(capabilities.thinking?.types?.adaptive),
+    ...(maxInputTokens ? { maxInputTokens } : {}),
+    ...(meta.display_name ? { displayName: meta.display_name } : {}),
+    ...(meta.created_at ? { createdAt: meta.created_at } : {}),
+  }
+
+  if (maxOutputTokens && parameters.maxOutputTokens) {
+    const maxParam = {
+      ...parameters.maxOutputTokens,
+      ui: {
+        ...(parameters.maxOutputTokens.ui || {}),
+        range: {
+          ...(parameters.maxOutputTokens.ui?.range || {}),
+          max: maxOutputTokens,
+        },
+      },
+    }
+    if (
+      typeof maxParam.default === 'number' &&
+      (maxParam.default <= 0 || maxParam.default > maxOutputTokens)
+    ) {
+      maxParam.default = maxOutputTokens
+    }
+    parameters.maxOutputTokens = maxParam
+    features.maxOutputTokens = maxOutputTokens
+  }
+
+  const thinkingParameter = buildThinkingParameter(meta, thinkingMaxOutputTokens)
+  if (thinkingParameter) parameters.thinkingBudget = thinkingParameter
+  else delete parameters.thinkingBudget
+
+  const effortParameter = buildEffortParameter(meta)
+  if (effortParameter) parameters.effort = effortParameter
+  else delete parameters.effort
+
+  let attachments = { ...(effective.attachments || {}) }
+  const mimes = []
+  if (isSupported(capabilities.image_input)) mimes.push(...CLAUDE_IMAGE_MIMES)
+  if (isSupported(capabilities.pdf_input)) mimes.push(...CLAUDE_DOCUMENT_MIMES)
+  attachments = mergeAllowedMimes(attachments, mimes)
+
+  return {
+    ...effective,
+    features,
+    parameters,
+    attachments,
+  }
+}
 
 function claudeThinkingTransform({ config, value }) {
   const budget = Number(value)
@@ -62,6 +214,8 @@ export class ClaudeProvider {
       normalizeSystemInstructionMode(systemInstructionMode)
     this.capabilities = loadCapabilities('claude', capabilitiesPath, runtimeDirname)
     this.label = this.capabilities?.label ?? 'Claude'
+    this.metadataTtlMs = MODELS_CACHE_TTL_MS
+    this._modelsCache = null
   }
 
   setDefaultSystemInstruction(systemInstruction, mode = this.systemInstructionMode) {
@@ -69,9 +223,17 @@ export class ClaudeProvider {
     this.systemInstructionMode = normalizeSystemInstructionMode(mode)
   }
 
-  _buildConfig(modelName, request) {
+  async _getEffectiveCapabilities(modelName) {
+    const base = getDefaultCapabilities(this.capabilities)
+    const meta = await this._getModelMetadata(modelName)
+    const withMetadata = applyClaudeModelMetadata(base, meta)
+    const override = findCapabilityModelOverride(this.capabilities, modelName)
+    return applyCapabilityModelOverride(withMetadata, override)
+  }
+
+  async _buildConfig(modelName, request) {
     const requestParameters = request?.parameters || {}
-    const { parameters, features } = getEffectiveCapabilities(this.capabilities, modelName)
+    const { parameters, features } = await this._getEffectiveCapabilities(modelName)
     const config = buildProviderConfig(parameters, requestParameters, {
       claudeThinking: claudeThinkingTransform,
     })
@@ -132,8 +294,8 @@ export class ClaudeProvider {
     return { messages: result, system: mergedSystem }
   }
 
-  _buildRequest(request) {
-    const config = this._buildConfig(request.model, request)
+  async _buildRequest(request) {
+    const config = await this._buildConfig(request.model, request)
     const { messages, system } = this._buildMessagesAndSystem(
       request.messages,
       config.system
@@ -148,7 +310,7 @@ export class ClaudeProvider {
   }
 
   async *generateStream(request) {
-    const sdkRequest = this._buildRequest(request)
+    const sdkRequest = await this._buildRequest(request)
     const stream = this.anthropic.messages.stream(sdkRequest)
     const rawUsage = { input_tokens: null, output_tokens: null }
 
@@ -195,7 +357,7 @@ export class ClaudeProvider {
   }
 
   async generate(request) {
-    const sdkRequest = this._buildRequest(request)
+    const sdkRequest = await this._buildRequest(request)
     const result = await this.anthropic.messages.create(sdkRequest)
     const parts = (result.content || []).map((block) => {
       if (block.type === 'text') return { text: block.text }
@@ -213,12 +375,46 @@ export class ClaudeProvider {
   }
 
   async listModels() {
-    const page = await this.anthropic.models.list()
-    const models = Array.isArray(page?.data) ? page.data : []
-    return models.map((model) => model.id).filter(Boolean)
+    try {
+      const cache = await this._loadModelsMetadata()
+      return cache.data.map((model) => model.id).filter(Boolean)
+    } catch {
+      const models = Array.isArray(this.capabilities?.models)
+        ? this.capabilities.models
+        : []
+      return models
+        .map((model) => model.modelName || model.id || model.modelQuery)
+        .filter(Boolean)
+    }
   }
 
   async getModelCapabilities(modelName) {
-    return buildModelCapabilities(this.capabilities, modelName)
+    const effective = await this._getEffectiveCapabilities(modelName)
+    return buildModelCapabilitiesFromEffective(effective, modelName)
+  }
+
+  async _loadModelsMetadata(force = false) {
+    const now = Date.now()
+    if (
+      !force &&
+      this._modelsCache &&
+      now - this._modelsCache.fetchedAt < this.metadataTtlMs
+    ) {
+      return this._modelsCache
+    }
+    const page = await this.anthropic.models.list()
+    const data = Array.isArray(page?.data) ? page.data : []
+    const byId = new Map(data.map((model) => [model.id, model]))
+    this._modelsCache = { data, byId, fetchedAt: now }
+    return this._modelsCache
+  }
+
+  async _getModelMetadata(modelName) {
+    try {
+      const cache = await this._loadModelsMetadata()
+      return cache.byId.get(modelName) || null
+    } catch {
+      return null
+    }
   }
 }

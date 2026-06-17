@@ -2,7 +2,10 @@ import OpenAI from 'openai'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import {
-  buildModelCapabilities,
+  applyCapabilityModelOverride,
+  buildModelCapabilitiesFromEffective,
+  findCapabilityModelOverride,
+  getDefaultCapabilities,
   getEffectiveCapabilities,
   loadCapabilities,
 } from './capabilities.js'
@@ -98,9 +101,22 @@ function applyOpenRouterModelMetadata(base, meta) {
   const cap = meta.top_provider?.max_completion_tokens
   if (Number.isFinite(cap) && params.maxOutputTokens) {
     const p = { ...params.maxOutputTokens }
-    p.max = cap
+    if (p.ui) {
+      p.ui = {
+        ...p.ui,
+        range: {
+          ...(p.ui.range || {}),
+          max: cap,
+        },
+      }
+      if (typeof p.ui.range.min === 'number' && p.ui.range.min > cap) {
+        p.ui.range.min = cap
+      }
+    } else {
+      p.max = cap
+      if (typeof p.min === 'number' && p.min > cap) p.min = cap
+    }
     if (typeof p.default === 'number' && p.default > cap) p.default = cap
-    if (typeof p.min === 'number' && p.min > cap) p.min = cap
     params.maxOutputTokens = p
   }
 
@@ -342,6 +358,7 @@ export class OpenRouterProvider {
       .filter(Boolean)
     this.metadataTtlMs = MODELS_CACHE_TTL_MS
     this._modelsCache = null
+    this.supportsStreamAbort = true
   }
 
   setDefaultSystemInstruction(systemInstruction, mode = this.systemInstructionMode) {
@@ -444,11 +461,14 @@ export class OpenRouterProvider {
   }
 
   async *generateStream(request) {
-    const stream = await this.client.chat.completions.create({
-      ...this._buildRequest(request),
-      stream: true,
-      stream_options: { include_usage: true },
-    })
+    const stream = await this.client.chat.completions.create(
+      {
+        ...this._buildRequest(request),
+        stream: true,
+        stream_options: { include_usage: true },
+      },
+      request.signal ? { signal: request.signal } : undefined
+    )
 
     const emit = (extra) =>
       eventFromParts({
@@ -599,10 +619,13 @@ export class OpenRouterProvider {
   }
 
   async getModelCapabilities(modelName) {
-    const base = buildModelCapabilities(this.capabilities, modelName)
+    const base = getDefaultCapabilities(this.capabilities)
     const meta = await this._getModelMetadata(modelName)
     const withMetadata = applyOpenRouterModelMetadata(base, meta)
+    const override = findCapabilityModelOverride(this.capabilities, modelName)
+    const effective = applyCapabilityModelOverride(withMetadata, override)
+    const display = buildModelCapabilitiesFromEffective(effective, modelName)
     const options = await this._getModelProviderOptions(modelName, meta)
-    return applyRoutingCapabilities(withMetadata, options)
+    return applyRoutingCapabilities(display, options)
   }
 }

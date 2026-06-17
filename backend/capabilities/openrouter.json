@@ -7,7 +7,7 @@
     },
     "tools": {},
     "attachments": {
-      "enabled": false,
+      "enabled": true,
       "allowRemoteUpload": false,
       "allowedMimes": [],
       "maxInlineFileSize": 10485760
@@ -38,7 +38,6 @@
         "api": { "path": "top_k" }
       },
       "reasoningEffort": {
-        "default": "none",
         "ui": {
           "type": "enum",
           "label": "Reasoning Effort",

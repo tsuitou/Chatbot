@@ -31,9 +31,27 @@ export function loadCapabilities(providerId, explicitPath, runtimeDirname) {
 // so authoring order in the JSON is irrelevant: `2.5-flash-lite` beats
 // `2.5-flash` by length, and `image` overrides its base family via priority.
 export function getEffectiveCapabilities(capabilities, modelName) {
+  const capModel = findCapabilityModelOverride(capabilities, modelName)
+
+  return applyCapabilityModelOverride(getDefaultCapabilities(capabilities), capModel)
+}
+
+export function getDefaultCapabilities(capabilities) {
+  return {
+    provider: capabilities?.provider,
+    label: capabilities?.label,
+    parameters: deepMerge({}, capabilities?.defaults?.parameters),
+    features: deepMerge({}, capabilities?.defaults?.features),
+    tools: deepMerge({}, capabilities?.defaults?.tools),
+    attachments: deepMerge({}, capabilities?.defaults?.attachments),
+    model: null,
+  }
+}
+
+export function findCapabilityModelOverride(capabilities, modelName) {
   const models = Array.isArray(capabilities?.models) ? capabilities.models : []
   const name = String(modelName || '')
-  const capModel =
+  return (
     models
       .filter((model) => model.modelQuery && name.includes(model.modelQuery))
       .sort(
@@ -41,15 +59,18 @@ export function getEffectiveCapabilities(capabilities, modelName) {
           (b.priority ?? 0) - (a.priority ?? 0) ||
           b.modelQuery.length - a.modelQuery.length
       )[0] || null
+  )
+}
 
+export function applyCapabilityModelOverride(effective, capModel) {
   return {
-    provider: capabilities?.provider,
-    label: capabilities?.label,
-    parameters: deepMerge(capabilities?.defaults?.parameters, capModel?.parameters),
-    features: deepMerge(capabilities?.defaults?.features, capModel?.features),
-    tools: deepMerge(capabilities?.defaults?.tools, capModel?.tools),
-    attachments: deepMerge(capabilities?.defaults?.attachments, capModel?.attachments),
-    model: capModel || null,
+    provider: effective?.provider,
+    label: effective?.label,
+    parameters: deepMerge(effective?.parameters, capModel?.parameters),
+    features: deepMerge(effective?.features, capModel?.features),
+    tools: deepMerge(effective?.tools, capModel?.tools),
+    attachments: deepMerge(effective?.attachments, capModel?.attachments),
+    model: capModel || effective?.model || null,
   }
 }
 
@@ -57,7 +78,7 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function deepMerge(base = {}, override = {}) {
+export function deepMerge(base = {}, override = {}) {
   const result = { ...(base || {}) }
   for (const [key, value] of Object.entries(override || {})) {
     if (value === null || value === undefined) {
@@ -73,6 +94,10 @@ function deepMerge(base = {}, override = {}) {
 
 export function buildModelCapabilities(capabilities, modelName, seed = {}) {
   const effective = getEffectiveCapabilities(capabilities, modelName)
+  return buildModelCapabilitiesFromEffective(effective, modelName, seed)
+}
+
+export function buildModelCapabilitiesFromEffective(effective, modelName, seed = {}) {
   return {
     provider: effective.provider,
     label: effective.label,
@@ -82,6 +107,34 @@ export function buildModelCapabilities(capabilities, modelName, seed = {}) {
     tools: effective.tools,
     attachments: effective.attachments,
   }
+}
+
+function numericBound(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : undefined
+}
+
+function isNumericParameter(definition) {
+  const type = definition?.ui?.type
+  return (
+    type === 'number' ||
+    type === 'integer' ||
+    definition?.ui?.range ||
+    definition?.min !== undefined ||
+    definition?.max !== undefined
+  )
+}
+
+export function resolveParameterDefault(definition) {
+  const value = definition?.default
+  if (value !== 'max' && value !== 'min') return value
+  if (!isNumericParameter(definition)) return value
+
+  const range = definition?.ui?.range || {}
+  const max = numericBound(definition?.max ?? range.max)
+  const min = numericBound(definition?.min ?? range.min)
+  if (value === 'max') return max ?? value
+  return min ?? value
 }
 
 // Flattens each parameter's `ui` block (with nested `range`) into the flat
@@ -101,7 +154,7 @@ export function buildParameterDisplay(parameterDefs, seed = {}) {
       ...rest,
       ...(range || {}),
     }
-    if (def.default !== undefined) display[key].default = def.default
+    if (def.default !== undefined) display[key].default = resolveParameterDefault(def)
   }
 
   return display

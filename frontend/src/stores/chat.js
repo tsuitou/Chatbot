@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import * as db from '../services/db'
 import * as apiAdapter from '../services/apiAdapter'
 import { getModelCapabilities, uploadFile } from '../services/api'
-import { startGeneration, registerSocketHandlers } from '../services/socket'
+import { registerSocketHandlers, startGeneration } from '../services/socket'
 import { showErrorToast } from '../services/notification'
 import { exportChatAsHTML } from '../services/htmlExporter'
 import {
@@ -621,13 +621,13 @@ export const useChatStore = defineStore('chat', {
     },
 
     async handleStreamChunk(rawChunk) {
-      if (!this.chatState.active || !this.isGenerating) return
-      if (rawChunk.chatId !== this.chatState.active.meta.id) return
+      if (!this.chatState.active || !this.isGenerating) return false
+      if (rawChunk.chatId !== this.chatState.active.meta.id) return false
       const stream = this.generationState.stream
-      if (!stream || stream.requestId !== rawChunk.requestId) return
+      if (!stream || stream.requestId !== rawChunk.requestId) return false
 
       const message = this._findMessageByRequestId(stream.requestId)
-      if (!message) return
+      if (!message) return false
 
       const parsed = apiAdapter.parseApiResponse(rawChunk) || {}
 
@@ -720,6 +720,7 @@ export const useChatStore = defineStore('chat', {
       syncContentRuntimeFromMessage(message)
 
       message.updatedAt = Date.now()
+      return true
     },
 
     async handleStreamEnd(result) {
@@ -729,6 +730,24 @@ export const useChatStore = defineStore('chat', {
       if (!stream || stream.requestId !== result.requestId) return
       const message = this._findMessageByRequestId(result.requestId)
       if (!message) return
+
+      if (result.aborted) {
+        message.status = 'cancelled'
+        message.metadata = {
+          ...message.metadata,
+          finishReason: result.reason || 'aborted',
+          duration: Date.now() - message.createdAt,
+        }
+        if (message.runtime?.system?.thoughts) {
+          message.runtime.system.thoughts.isStreaming = false
+          message.runtime.system.thoughts.updatedAt = Date.now()
+        }
+        ensureContentRuntime(message).isReady = true
+        await this._persistActiveMessage(message)
+        this._setGenerationState(GenerationStatus.IDLE)
+        this._touchActiveChat()
+        return
+      }
 
       message.status = 'completed'
       if (message.runtime?.system?.thoughts) {

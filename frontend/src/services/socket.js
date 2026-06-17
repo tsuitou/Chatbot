@@ -48,8 +48,22 @@ socket.on('disconnect', () => {
   console.log('Socket disconnected')
 })
 
-socket.on('chunk', (rawChunk) => {
-  handlers.onChunk(rawChunk)
+socket.on('chunk', async (rawChunk, ack) => {
+  try {
+    const handled = await handlers.onChunk(rawChunk)
+    if (typeof ack === 'function') {
+      ack(
+        handled === false
+          ? { ok: false, message: 'Chunk was ignored by the client.' }
+          : { ok: true }
+      )
+    }
+  } catch (error) {
+    if (typeof ack === 'function') {
+      ack({ ok: false, message: error?.message || 'Failed to handle chunk.' })
+    }
+    console.error('Failed to handle stream chunk:', error)
+  }
 })
 
 socket.on('end_generation', (result) => {

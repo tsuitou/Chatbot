@@ -1,3 +1,5 @@
+import { resolveParameterDefault } from './capabilities.js'
+
 function hasValue(value) {
   return value !== undefined && value !== null && value !== ''
 }
@@ -22,7 +24,8 @@ function resolveParameterValue(requestParameters, key, definition) {
     const requested = requestParameters[key]
     return hasValue(requested) ? requested : undefined
   }
-  return hasValue(definition?.default) ? definition.default : undefined
+  const defaultValue = resolveParameterDefault(definition)
+  return hasValue(defaultValue) ? defaultValue : undefined
 }
 
 export function buildProviderConfig(parameterDefinitions, requestParameters = {}, transforms = {}) {

@@ -77,12 +77,18 @@
                 <strong>{{ selectedProviderDetails.label }}</strong>
               </div>
               <div class="provider-detail-row">
-                <span>Prompt</span>
-                <strong>{{ selectedProviderDetails.promptPrice }}</strong>
+                <span>Precision</span>
+                <strong>{{ selectedProviderDetails.precision }}</strong>
               </div>
               <div class="provider-detail-row">
-                <span>Completion</span>
-                <strong>{{ selectedProviderDetails.completionPrice }}</strong>
+                <span>Input $/1M tok</span>
+                <strong>{{ selectedProviderDetails.inputPricePerMtok }}</strong>
+              </div>
+              <div class="provider-detail-row">
+                <span>Output $/1M tok</span>
+                <strong>{{
+                  selectedProviderDetails.outputPricePerMtok
+                }}</strong>
               </div>
               <div class="provider-detail-row">
                 <span>Context</span>
@@ -93,14 +99,6 @@
                 <strong>{{
                   selectedProviderDetails.maxCompletionTokens
                 }}</strong>
-              </div>
-              <div class="provider-detail-row">
-                <span>Throughput</span>
-                <strong>{{ selectedProviderDetails.throughput }}</strong>
-              </div>
-              <div class="provider-detail-row">
-                <span>Precision</span>
-                <strong>{{ selectedProviderDetails.precision }}</strong>
               </div>
             </div>
           </fieldset>
@@ -135,7 +133,7 @@
                   :placeholder="
                     param.default !== undefined
                       ? String(param.default)
-                      : 'Default'
+                      : 'Not specified'
                   "
                   :step="param.step"
                   :min="param.min"
@@ -175,7 +173,7 @@
                   class="select-input"
                 >
                   <option :value="undefined">
-                    Default
+                    {{ parameterDefaultOptionLabel(param) }}
                     <template v-if="param.default !== undefined">
                       ({{
                         param.options?.find((o) => o.value === param.default)
@@ -298,6 +296,10 @@ const dynamicParameters = computed(() => {
   return normalizeDynamicParameters(modelCapabilities.value)
 })
 
+const parameterDefaultOptionLabel = (param) => {
+  return param?.default !== undefined ? 'Default' : 'Not specified'
+}
+
 const providerRoutingOptions = computed(() => {
   const options =
     modelCapabilities.value?.routing?.providerSelection?.options || []
@@ -342,17 +344,10 @@ const formatNumber = (value) => {
 const formatPrice = (value) => {
   const number = Number(value)
   if (!Number.isFinite(number)) return 'Default'
+  const perMillion = number * 1_000_000
   return `$${new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 8,
-  }).format(number)} / token`
-}
-
-const formatThroughput = (value) => {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return 'Default'
-  return `${new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  }).format(number)} tok/s`
+    maximumFractionDigits: 4,
+  }).format(perMillion)}`
 }
 
 const selectedProviderDetails = computed(() => {
@@ -360,21 +355,19 @@ const selectedProviderDetails = computed(() => {
   if (!option) {
     return {
       label: 'Auto',
-      promptPrice: 'OpenRouter default',
-      completionPrice: 'OpenRouter default',
+      inputPricePerMtok: 'OpenRouter default',
+      outputPricePerMtok: 'OpenRouter default',
       contextLength: 'Model default',
       maxCompletionTokens: 'Model default',
-      throughput: 'Provider default',
       precision: 'Provider default',
     }
   }
   return {
     label: option.label || option.id,
-    promptPrice: formatPrice(option.pricing?.prompt),
-    completionPrice: formatPrice(option.pricing?.completion),
+    inputPricePerMtok: formatPrice(option.pricing?.prompt),
+    outputPricePerMtok: formatPrice(option.pricing?.completion),
     contextLength: formatNumber(option.contextLength),
     maxCompletionTokens: formatNumber(option.maxCompletionTokens),
-    throughput: formatThroughput(option.throughput),
     precision: option.precision || 'Default',
   }
 })
