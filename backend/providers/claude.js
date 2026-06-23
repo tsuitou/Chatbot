@@ -58,12 +58,26 @@ function mergeAllowedMimes(attachments, mimes) {
   }
 }
 
-function buildThinkingParameter(meta, maxOutputTokens) {
+// Single source of truth for Claude's thinking quirks across API versions:
+//   adaptive  — type:"adaptive" (auto). Opus 4.6+ / Fable 5.
+//   enabled   — legacy type:"enabled" + budget_tokens. Removed (400) on
+//               Fable 5 / Opus 4.7 / 4.8; still accepted on Sonnet 4.5 /
+//               Haiku 4.5 (and deprecated-but-functional on Opus 4.6).
+function deriveClaudeThinking(meta) {
   const thinking = meta?.capabilities?.thinking
-  if (!isSupported(thinking)) return null
+  return {
+    supported: isSupported(thinking),
+    adaptive: isSupported(thinking?.types?.adaptive),
+    enabled: isSupported(thinking?.types?.enabled),
+  }
+}
+
+function buildThinkingParameter(meta, maxOutputTokens) {
+  const thinking = deriveClaudeThinking(meta)
+  if (!thinking.supported) return null
 
   const specialValues = [{ label: 'Disabled', value: 0 }]
-  if (isSupported(thinking.types?.adaptive)) {
+  if (thinking.adaptive) {
     specialValues.push({ label: 'Adaptive', value: -1 })
   }
 
@@ -73,7 +87,7 @@ function buildThinkingParameter(meta, maxOutputTokens) {
     ui: {
       type: 'integer',
       label: 'Thinking Budget',
-      ...(isSupported(thinking.types?.enabled) && rangeMax
+      ...(thinking.enabled && rangeMax
         ? {
             range: {
               min: CLAUDE_MIN_THINKING_BUDGET,
@@ -84,7 +98,7 @@ function buildThinkingParameter(meta, maxOutputTokens) {
         : {}),
       specialValues,
     },
-    api: { transform: 'claudeThinking' },
+    api: { transform: 'claudeThinking', adaptiveSupported: thinking.adaptive },
   }
 }
 
@@ -118,6 +132,7 @@ function applyClaudeModelMetadata(effective, meta) {
   const thinkingMaxOutputTokens = maxOutputTokens || fallbackMaxOutputTokens
   const maxInputTokens = positiveInteger(meta.max_input_tokens)
   const parameters = { ...(effective.parameters || {}) }
+  const thinking = deriveClaudeThinking(meta)
   const features = {
     ...(effective.features || {}),
     batch: isSupported(capabilities.batch),
@@ -125,8 +140,8 @@ function applyClaudeModelMetadata(effective, meta) {
     codeExecution: isSupported(capabilities.code_execution),
     contextManagement: isSupported(capabilities.context_management),
     structuredOutputs: isSupported(capabilities.structured_outputs),
-    extendedThinking: isSupported(capabilities.thinking),
-    adaptiveThinking: isSupported(capabilities.thinking?.types?.adaptive),
+    extendedThinking: thinking.supported,
+    adaptiveThinking: thinking.adaptive,
     ...(maxInputTokens ? { maxInputTokens } : {}),
     ...(meta.display_name ? { displayName: meta.display_name } : {}),
     ...(meta.created_at ? { createdAt: meta.created_at } : {}),
@@ -175,13 +190,25 @@ function applyClaudeModelMetadata(effective, meta) {
   }
 }
 
-function claudeThinkingTransform({ config, value }) {
+function claudeThinkingTransform({ config, value, definition }) {
+  const adaptiveSupported = definition?.api?.adaptiveSupported === true
   const budget = Number(value)
+
+  // Explicit "Adaptive" selection (-1).
   if (budget === -1) {
     config.thinking = { type: 'adaptive' }
     return
   }
   if (!Number.isFinite(budget) || budget < CLAUDE_MIN_THINKING_BUDGET) return
+
+  // type:"enabled" with budget_tokens is deprecated and rejected (400) on
+  // adaptive-capable models (Opus 4.6+/Fable 5). Map any positive budget to
+  // adaptive there; keep the explicit budget only for legacy models that lack
+  // adaptive thinking (e.g. Sonnet 4.5, Haiku 4.5).
+  if (adaptiveSupported) {
+    config.thinking = { type: 'adaptive' }
+    return
+  }
 
   config.thinking = {
     type: 'enabled',
