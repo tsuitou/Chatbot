@@ -241,15 +241,14 @@ function resolveProviderKeys() {
 
 const providerKeys = resolveProviderKeys()
 if (!providerKeys.gemini && !providerKeys.claude && !providerKeys.openrouter) {
-  console.error('\n======================================================================')
-  console.error('❌ Error: No provider API key found!')
-  console.error('Please configure at least one API key using the following method:')
-  console.error('Place a "key" file containing your API key(s) in the execution directory.')
-  console.error('Format (JSON or text):')
-  console.error('  JSON:  {"gemini": "YOUR_GEMINI_KEY", "claude": "YOUR_CLAUDE_KEY", "openrouter": "YOUR_OPENROUTER_KEY"}')
-  console.error('  Plain: YOUR_GEMINI_KEY')
-  console.error('======================================================================\n')
-  process.exit(1)
+  console.warn('\n======================================================================')
+  console.warn('⚠️  Warning: No provider API key found.')
+  console.warn('The server will start, but no model will be available until a key is configured.')
+  console.warn('To enable a provider, place a "key" file containing your API key(s) in the execution directory.')
+  console.warn('Format (JSON or text):')
+  console.warn('  JSON:  {"gemini": "YOUR_GEMINI_KEY", "claude": "YOUR_CLAUDE_KEY", "openrouter": "YOUR_OPENROUTER_KEY"}')
+  console.warn('  Plain: YOUR_GEMINI_KEY')
+  console.warn('======================================================================\n')
 }
 
 const modelFilterKeywords = (process.env.MODEL_FILTER || '')
