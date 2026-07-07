@@ -1,0 +1,51 @@
+{
+  "provider": "openai-compat",
+  "label": "OpenAI Compatible",
+  "defaults": {
+    "features": {
+      "systemInstruction": true
+    },
+    "tools": {},
+    "attachments": {
+      "enabled": true,
+      "allowRemoteUpload": false,
+      "allowedMimes": ["image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"],
+      "maxInlineFileSize": 10485760
+    },
+    "parameters": {
+      "temperature": {
+        "ui": {
+          "type": "number",
+          "label": "Temperature",
+          "range": { "min": 0, "max": 2, "step": 0.05 }
+        },
+        "api": { "path": "temperature" }
+      },
+      "topP": {
+        "ui": {
+          "type": "number",
+          "label": "Top P",
+          "range": { "min": 0, "max": 1, "step": 0.01 }
+        },
+        "api": { "path": "top_p" }
+      },
+      "topK": {
+        "ui": {
+          "type": "integer",
+          "label": "Top K",
+          "range": { "min": 0, "max": 500, "step": 1 }
+        },
+        "api": { "path": "top_k" }
+      },
+      "maxOutputTokens": {
+        "ui": {
+          "type": "integer",
+          "label": "Max Output Tokens",
+          "range": { "min": 1, "max": 65536 }
+        },
+        "api": { "path": "max_tokens" }
+      }
+    }
+  },
+  "models": []
+}

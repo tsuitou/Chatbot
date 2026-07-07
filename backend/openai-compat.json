@@ -1,0 +1,8 @@
+{
+  "label": "vLLM",
+  "baseUrl": "http://localhost:8000/v1",
+  "apiKey": "EMPTY",
+  "request": {
+    "chat_template_kwargs": { "reasoning_effort": "high" }
+  }
+}

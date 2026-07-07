@@ -12,6 +12,10 @@ import dotenv from 'dotenv'
 import { GeminiProvider } from './providers/gemini.js'
 import { ClaudeProvider } from './providers/claude.js'
 import { OpenRouterProvider } from './providers/openrouter.js'
+import {
+  OpenAICompatProvider,
+  loadOpenAICompatEndpoints,
+} from './providers/openaiCompat.js'
 import { createProviderRegistry } from './providers/registry.js'
 import { createSpecialRegistry } from './specialModels.js'
 import { makeResolveFirstExisting } from './utils.js'
@@ -117,6 +121,12 @@ function applyReloadedConfig() {
     defaultSystemInstruction,
     systemInstructionMode
   )
+  for (const entry of openaiCompatEntries) {
+    entry.provider.setDefaultSystemInstruction(
+      defaultSystemInstruction,
+      systemInstructionMode
+    )
+  }
 }
 
 // --- Init ---
@@ -240,7 +250,12 @@ function resolveProviderKeys() {
 }
 
 const providerKeys = resolveProviderKeys()
-if (!providerKeys.gemini && !providerKeys.claude && !providerKeys.openrouter) {
+if (
+  !providerKeys.gemini &&
+  !providerKeys.claude &&
+  !providerKeys.openrouter &&
+  !(process.env.OPENAI_COMPAT_CONFIG || '').trim()
+) {
   console.warn('\n======================================================================')
   console.warn('⚠️  Warning: No provider API key found.')
   console.warn('The server will start, but no model will be available until a key is configured.')
@@ -251,10 +266,17 @@ if (!providerKeys.gemini && !providerKeys.claude && !providerKeys.openrouter) {
   console.warn('======================================================================\n')
 }
 
-const modelFilterKeywords = (process.env.MODEL_FILTER || '')
-  .split(',')
-  .map((keyword) => keyword.trim().toLowerCase())
-  .filter(Boolean)
+// Per-provider model list filters. Providers with curated lists (openrouter
+// allowlist, openai-compat config) are never filtered.
+const parseFilterKeywords = (raw) =>
+  (raw || '')
+    .split(',')
+    .map((keyword) => keyword.trim().toLowerCase())
+    .filter(Boolean)
+const providerModelFilters = {
+  gemini: parseFilterKeywords(process.env.GEMINI_MODEL_FILTER),
+  claude: parseFilterKeywords(process.env.CLAUDE_MODEL_FILTER),
+}
 const connectionInfo = {}
 
 // Initialize Provider
@@ -282,10 +304,47 @@ const openrouterProvider = providerKeys.openrouter
       models: process.env.OPENROUTER_MODELS,
     })
   : null
+
+// OpenAI-compatible endpoints (vLLM etc.): OPENAI_COMPAT_CONFIG points to a
+// JSON file describing one endpoint or an array of them.
+function resolveOpenAICompatConfigPath() {
+  const raw = (process.env.OPENAI_COMPAT_CONFIG || '').trim()
+  if (!raw) return null
+  if (path.isAbsolute(raw)) return raw
+  return resolveFirstExisting(raw, 'file') || path.resolve(process.cwd(), raw)
+}
+const openaiCompatCapabilitiesPath = resolveFirstExisting(
+  path.join('capabilities', 'openai-compat.json'),
+  'file'
+)
+const openaiCompatEntries = loadOpenAICompatEndpoints(
+  resolveOpenAICompatConfigPath()
+).map((endpoint, index) => {
+  const id =
+    endpoint.id || (index === 0 ? 'openai-compat' : `openai-compat-${index + 1}`)
+  return {
+    id,
+    provider: new OpenAICompatProvider(endpoint, defaultSystemInstruction, {
+      capabilitiesPath: openaiCompatCapabilitiesPath,
+      systemInstructionMode,
+      providerId: id,
+    }),
+    modelPrefixes: [],
+  }
+})
+if (openaiCompatEntries.length) {
+  console.log(
+    `Registered ${openaiCompatEntries.length} OpenAI-compatible endpoint(s): ${openaiCompatEntries
+      .map((e) => e.id)
+      .join(', ')}`
+  )
+}
+
 const providerRegistry = createProviderRegistry([
   { id: 'gemini', provider: geminiProvider },
   { id: 'claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
   { id: 'openrouter', provider: openrouterProvider, modelPrefixes: [] },
+  ...openaiCompatEntries,
 ])
 
 const specialRegistry = createSpecialRegistry({ providerKeys })
@@ -361,12 +420,13 @@ function handleUploadMiddleware(req, res, next) {
     })
   })
 }
-const filterModelNames = (names = []) => {
+const filterModelNames = (providerId, names = []) => {
   const list = Array.isArray(names) ? names : []
-  if (!modelFilterKeywords.length) return list
+  const keywords = providerModelFilters[providerId] || []
+  if (!keywords.length) return list
   return list.filter((name) => {
     const normalized = String(name || '').toLowerCase()
-    return modelFilterKeywords.some((keyword) => normalized.includes(keyword))
+    return keywords.some((keyword) => normalized.includes(keyword))
   })
 }
 const numberOr = (v, fallback) => {
@@ -429,7 +489,7 @@ apiRouter.get('/models', async (_req, res) => {
       groups.push({
         provider: group.provider,
         label: group.label,
-        models: filterModelNames(await group.models),
+        models: filterModelNames(group.provider, await group.models),
       })
     }
 
