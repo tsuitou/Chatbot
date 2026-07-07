@@ -7,10 +7,8 @@
     },
     "tools": {},
     "attachments": {
-      "enabled": true,
-      "allowRemoteUpload": false,
-      "allowedMimes": ["image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"],
-      "maxInlineFileSize": 10485760
+      "enabled":false,
+      "allowRemoteUpload": false
     },
     "parameters": {
       "temperature": {
@@ -36,14 +34,6 @@
           "range": { "min": 0, "max": 500, "step": 1 }
         },
         "api": { "path": "top_k" }
-      },
-      "maxOutputTokens": {
-        "ui": {
-          "type": "integer",
-          "label": "Max Output Tokens",
-          "range": { "min": 1, "max": 65536 }
-        },
-        "api": { "path": "max_tokens" }
       }
     }
   },
