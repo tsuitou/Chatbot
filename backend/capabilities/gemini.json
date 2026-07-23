@@ -140,6 +140,31 @@
       }
     },
     {
+      "modelQuery": "3.6-flash",
+      "features": {
+        "includeServerSideToolInvocations": true
+      },
+      "parameters": {
+        "thinkingLevel": {
+          "ui": {
+            "type": "enum",
+            "label": "Thinking Level",
+            "options": [
+              { "label": "Minimal", "value": "minimal" },
+              { "label": "Low", "value": "low" },
+              { "label": "Medium", "value": "medium" },
+              { "label": "High", "value": "high" }
+            ]
+          },
+          "api": { "path": "thinkingConfig.thinkingLevel" }
+        },
+        "includeThoughts": {
+          "ui": { "type": "boolean", "label": "Include Thoughts" },
+          "api": { "path": "thinkingConfig.includeThoughts" }
+        }
+      }
+    },
+    {
       "modelQuery": "3.1-pro",
       "parameters": {
         "thinkingLevel": {
