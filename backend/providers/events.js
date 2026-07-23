@@ -3,6 +3,9 @@ import { normalizeGeminiUsage } from './shared.js'
 export function normalizeUsage(u) {
   if (!u) return null
   const input = u.inputTokens ?? u.input_tokens ?? null
+  const uncachedInput = u.uncachedInputTokens ?? null
+  const cacheRead = u.cacheReadTokens ?? null
+  const cacheWrite = u.cacheWriteTokens ?? null
   const output = u.outputTokens ?? u.output_tokens ?? null
   const reasoning = u.reasoningTokens ?? u.thoughtsTokenCount ?? null
   const total =
@@ -11,6 +14,9 @@ export function normalizeUsage(u) {
     (input != null && output != null ? input + output : null)
   return {
     prompt: input,
+    uncachedInput,
+    cacheRead,
+    cacheWrite,
     output,
     reasoning,
     total,

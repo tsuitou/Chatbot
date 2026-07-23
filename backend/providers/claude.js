@@ -222,10 +222,19 @@ function claudeThinkingTransform({ config, value, definition }) {
 
 function normalizeClaudeUsage(u) {
   if (!u) return null
-  const input = u.input_tokens ?? null
+  const uncachedInput = u.input_tokens ?? null
+  const cacheRead = u.cache_read_input_tokens ?? null
+  const cacheWrite = u.cache_creation_input_tokens ?? null
+  const inputParts = [uncachedInput, cacheRead, cacheWrite]
+  const input = inputParts.some((value) => value != null)
+    ? inputParts.reduce((sum, value) => sum + (value ?? 0), 0)
+    : null
   const output = u.output_tokens ?? null
   return {
     inputTokens: input,
+    uncachedInputTokens: uncachedInput,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
     outputTokens: output,
     reasoningTokens: null,
     totalTokens: input != null && output != null ? input + output : null,
@@ -333,18 +342,30 @@ export class ClaudeProvider {
       model: request.model,
       messages,
       ...config,
+      cache_control: { type: 'ephemeral' },
     }
   }
 
   async *generateStream(request) {
     const sdkRequest = await this._buildRequest(request)
     const stream = this.anthropic.messages.stream(sdkRequest)
-    const rawUsage = { input_tokens: null, output_tokens: null }
+    const rawUsage = {
+      input_tokens: null,
+      cache_read_input_tokens: null,
+      cache_creation_input_tokens: null,
+      output_tokens: null,
+    }
 
     for await (const event of stream) {
       if (event.type === 'message_start') {
         const u = event.message?.usage
         if (u?.input_tokens != null) rawUsage.input_tokens = u.input_tokens
+        if (u?.cache_read_input_tokens != null) {
+          rawUsage.cache_read_input_tokens = u.cache_read_input_tokens
+        }
+        if (u?.cache_creation_input_tokens != null) {
+          rawUsage.cache_creation_input_tokens = u.cache_creation_input_tokens
+        }
         if (u?.output_tokens != null) rawUsage.output_tokens = u.output_tokens
         yield eventFromParts({
           chatId: request.chatId,

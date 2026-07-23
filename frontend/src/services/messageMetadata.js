@@ -91,6 +91,12 @@ export function buildMetadataLines(
   const usageParts = []
   if (usage.prompt != null)
     usageParts.push(`Prompt: ${escapeHtml(usage.prompt)}`)
+  if (usage.uncachedInput != null)
+    usageParts.push(`Uncached: ${escapeHtml(usage.uncachedInput)}`)
+  if (usage.cacheRead != null)
+    usageParts.push(`Cache Read: ${escapeHtml(usage.cacheRead)}`)
+  if (usage.cacheWrite != null)
+    usageParts.push(`Cache Write: ${escapeHtml(usage.cacheWrite)}`)
   if (usage.output != null)
     usageParts.push(`Output: ${escapeHtml(usage.output)}`)
   if (usage.reasoning != null)
