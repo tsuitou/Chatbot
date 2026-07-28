@@ -34,16 +34,28 @@ async function buildCanonicalParts(message, { allowRemoteUpload = true } = {}) {
     }
   }
 
-  const thoughtSignatures = Array.isArray(message?.metadata?.thoughtSignatures)
+  let thoughtSignatures = Array.isArray(message?.metadata?.thoughtSignatures)
     ? message.metadata.thoughtSignatures
     : []
+  // Entries with partIndex are from the old accumulator, whose streaming path
+  // (every chunk-relative partIndex is 0) prepended chunks and stored the list
+  // newest-first. Restore oldest-first so the mapper's "last entry is the
+  // newest signature" rule holds. Old non-streaming lists (distinct indexes)
+  // were already oldest-first.
+  const legacyNewestFirst =
+    thoughtSignatures.length > 1 &&
+    thoughtSignatures.every(
+      (entry) => typeof entry?.partIndex === 'number' && entry.partIndex === 0
+    )
+  if (legacyNewestFirst) {
+    thoughtSignatures = [...thoughtSignatures].reverse()
+  }
   for (const entry of thoughtSignatures) {
     const signature = entry?.signature ?? entry
     if (!signature) continue
     parts.push({
       type: 'thoughtSignature',
       signature,
-      partIndex: typeof entry?.partIndex === 'number' ? entry.partIndex : 0,
     })
   }
 

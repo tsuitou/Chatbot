@@ -26,18 +26,22 @@ export function buildGeminiContents(messages = []) {
     const signatures = []
     for (const part of message.parts || []) {
       if (part?.type === 'thoughtSignature') {
-        signatures.push(part)
+        if (part.signature) signatures.push(String(part.signature))
         continue
       }
       const converted = buildGeminiPart(part)
       if (converted) parts.push(converted)
     }
     if (!parts.length) parts.push({ text: '' })
-    for (const signature of signatures) {
-      const target = parts[signature.partIndex] || parts[0]
-      if (target && signature.signature) {
-        target.thoughtSignature = signature.signature
-      }
+    if (signatures.length) {
+      // Gemini emits the signature that closes the turn on its final text
+      // part; earlier ones belong to tool-call parts we don't resend, and
+      // gemini-3.6+ rejects them when attached to a text part. Send only the
+      // newest signature, and never on a file part.
+      const signature = signatures[signatures.length - 1]
+      const target = parts.find((p) => typeof p.text === 'string')
+      if (target) target.thoughtSignature = signature
+      else parts.push({ text: '', thoughtSignature: signature })
     }
     return { role: message.role, parts }
   })

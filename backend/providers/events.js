@@ -102,10 +102,9 @@ export function eventFromParts({
     }
     if (part?.thoughtSignature) {
       const signature = String(part.thoughtSignature)
-      const key = `${idx}:${signature}`
-      if (!seenSignatures.has(key)) {
-        seenSignatures.add(key)
-        thoughtSignatures.push({ signature, partIndex: idx })
+      if (!seenSignatures.has(signature)) {
+        seenSignatures.add(signature)
+        thoughtSignatures.push({ signature })
       }
     }
   }

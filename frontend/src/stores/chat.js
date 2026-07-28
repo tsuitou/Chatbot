@@ -671,35 +671,28 @@ export const useChatStore = defineStore('chat', {
         Object.assign(metadata, parsed.metadata)
       }
 
-      // Merge thought signatures (append unique by signature+index)
-      const mergeThoughtSignatures = (incoming = []) => {
-        if (!Array.isArray(incoming) || !incoming.length) return
-        const existing = Array.isArray(metadata.thoughtSignatures)
-          ? [...metadata.thoughtSignatures]
+      // Merge thought signatures. Object.assign above replaced the list with
+      // this chunk's entries, so rebuild from the accumulated list and append
+      // the chunk's new ones after it — arrival order must survive because
+      // only the newest signature is valid to send back on the text part.
+      {
+        const existing = Array.isArray(message.metadata?.thoughtSignatures)
+          ? [...message.metadata.thoughtSignatures]
           : []
         const seen = new Set(
-          existing.map((item) => {
-            const sig = item?.signature ?? item
-            const idx = item?.partIndex ?? 0
-            return `${idx}:${sig}`
-          })
+          existing.map((item) => String(item?.signature ?? item))
         )
-        for (const item of incoming) {
+        for (const item of Array.isArray(parsed.metadata?.thoughtSignatures)
+          ? parsed.metadata.thoughtSignatures
+          : []) {
           const sig = item?.signature ?? item
-          if (!sig) continue
-          const idx =
-            typeof item?.partIndex === 'number' && item.partIndex >= 0
-              ? item.partIndex
-              : 0
-          const key = `${idx}:${sig}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          existing.push({ signature: sig, partIndex: idx })
+          if (!sig || seen.has(String(sig))) continue
+          seen.add(String(sig))
+          existing.push({ signature: String(sig) })
         }
-        metadata.thoughtSignatures = existing
+        if (existing.length) metadata.thoughtSignatures = existing
+        else delete metadata.thoughtSignatures
       }
-      mergeThoughtSignatures(message.metadata?.thoughtSignatures)
-      mergeThoughtSignatures(parsed.metadata?.thoughtSignatures)
 
       const usage = parsed.metadata?.usage
       if (usage) {
