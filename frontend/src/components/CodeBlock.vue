@@ -59,7 +59,6 @@ const headerHeight = ref(0)
 const scrollTarget = ref(null)
 let resizeObserver
 const topOffset = ref(0)
-const stopOffset = ref(0)
 const MIN_PIN_HEIGHT = 400
 
 const isSpecialLang = computed(
@@ -183,9 +182,7 @@ const handleScroll = () => {
   const shouldPin =
     isTallEnough &&
     rect.top < topOffset.value &&
-    rect.bottom > headerHeight.value
-  const bottomOffset = rect.bottom - (topOffset.value + headerHeight.value)
-  stopOffset.value = shouldPin && bottomOffset < 0 ? bottomOffset : 0
+    rect.bottom > topOffset.value + headerHeight.value
   isPinned.value = shouldPin
   if (shouldPin) {
     updateHeaderMetrics()
@@ -260,8 +257,6 @@ const headerStyle = computed(() => {
     left: `${headerLeft.value}px`,
     width: `${headerWidth.value}px`,
     zIndex: 5,
-
-    transform: `translateY(${stopOffset.value}px)`,
   }
 })
 
