@@ -52,21 +52,48 @@
         </button>
         <button
           class="action-button"
-          :class="{ disabled: !isChatOpen }"
+          :class="{ disabled: isSnapshotActionDisabled }"
           :title="duplicateTitle"
-          :disabled="!isChatOpen"
+          :aria-label="duplicateTitle"
+          :disabled="isSnapshotActionDisabled"
           @click="duplicateChat"
         >
-          <font-awesome-icon icon="copy" />
+          <font-awesome-icon
+            v-if="pendingChatAction === 'duplicate'"
+            icon="spinner"
+            spin
+          />
+          <font-awesome-icon v-else icon="copy" />
         </button>
         <button
           class="action-button"
-          :class="{ disabled: !isChatOpen }"
-          :title="downloadTitle"
-          :disabled="!isChatOpen"
-          @click="downloadChat"
+          :class="{ disabled: isSnapshotActionDisabled }"
+          :title="htmlExportTitle"
+          :aria-label="htmlExportTitle"
+          :disabled="isSnapshotActionDisabled"
+          @click="downloadChatAsHTML"
         >
-          <font-awesome-icon icon="download" />
+          <font-awesome-icon
+            v-if="pendingChatAction === 'html'"
+            icon="spinner"
+            spin
+          />
+          <font-awesome-icon v-else icon="file-code" />
+        </button>
+        <button
+          class="action-button"
+          :class="{ disabled: isSnapshotActionDisabled }"
+          :title="zipExportTitle"
+          :aria-label="zipExportTitle"
+          :disabled="isSnapshotActionDisabled"
+          @click="downloadChatAsZIP"
+        >
+          <font-awesome-icon
+            v-if="pendingChatAction === 'zip'"
+            icon="spinner"
+            spin
+          />
+          <font-awesome-icon v-else icon="file-zipper" />
         </button>
       </div>
     </div>
@@ -103,6 +130,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useChatStore } from '../stores/chat'
 import { useDisplayStore } from '../stores/display'
+import { showErrorToast, showSuccessToast } from '../services/notification'
 import Message from './Message.vue'
 import PreviewPanel from './PreviewPanel.vue'
 import ChatSettingsModal from './ChatSettingsModal.vue'
@@ -114,9 +142,11 @@ const titleInput = ref(null)
 const isEditingTitle = ref(false)
 const editingTitle = ref('')
 const isChatSettingsOpen = ref(false)
+const pendingChatAction = ref(null)
 
 const activeChat = computed(() => chatStore.activeChat)
 const isChatOpen = computed(() => chatStore.isChatOpen)
+const isGenerating = computed(() => chatStore.isGenerating)
 const messageGroups = computed(() => displayStore.messageGroups)
 const isPreviewOpen = computed(() => displayStore.isPreviewOpen)
 const scrollSignal = computed(() => chatStore.scrollSignal)
@@ -130,15 +160,33 @@ const bookmarkTitle = computed(() =>
       : 'Bookmark'
     : 'Bookmark (available after chat is saved)'
 )
-const duplicateTitle = computed(() =>
-  isChatOpen.value
-    ? 'Duplicate Chat'
-    : 'Duplicate Chat (available after chat is saved)'
+const isSnapshotActionDisabled = computed(
+  () =>
+    !isChatOpen.value || isGenerating.value || pendingChatAction.value !== null
 )
-const downloadTitle = computed(() =>
-  isChatOpen.value
-    ? 'Download Chat'
-    : 'Download Chat (available after chat is saved)'
+const snapshotActionUnavailableReason = computed(() => {
+  if (!isChatOpen.value) return 'available after the chat is saved'
+  if (isGenerating.value) return 'available after generation completes'
+  if (pendingChatAction.value) return 'another chat action is in progress'
+  return ''
+})
+const snapshotActionTitle = (label, action, progressLabel) => {
+  if (pendingChatAction.value === action) return progressLabel
+  const reason = snapshotActionUnavailableReason.value
+  return reason ? `${label} (${reason})` : label
+}
+const duplicateTitle = computed(() =>
+  snapshotActionTitle('Duplicate Chat', 'duplicate', 'Duplicating Chat...')
+)
+const htmlExportTitle = computed(() =>
+  snapshotActionTitle(
+    'Export Chat as HTML',
+    'html',
+    'Exporting Chat as HTML...'
+  )
+)
+const zipExportTitle = computed(() =>
+  snapshotActionTitle('Export Chat as ZIP', 'zip', 'Exporting Chat as ZIP...')
 )
 const chatSettingsTitle = 'Chat Settings'
 
@@ -212,16 +260,56 @@ const toggleBookmark = () => {
   }
 }
 
-const duplicateChat = () => {
-  if (activeChat.value) {
-    chatStore.duplicateChat(activeChat.value.id)
+const runChatAction = async ({
+  action,
+  execute,
+  successMessage,
+  errorMessage,
+}) => {
+  if (isSnapshotActionDisabled.value) return
+  pendingChatAction.value = action
+  try {
+    await execute()
+    showSuccessToast(successMessage)
+  } catch (error) {
+    console.error(`Chat action failed: ${action}`, error)
+    showErrorToast(errorMessage)
+  } finally {
+    pendingChatAction.value = null
   }
 }
 
-const downloadChat = async () => {
-  if (activeChat.value) {
-    await chatStore.downloadChatAsHTML()
-  }
+const duplicateChat = async () => {
+  const chatId = activeChat.value?.id
+  if (!chatId) return
+  await runChatAction({
+    action: 'duplicate',
+    execute: () => chatStore.duplicateChat(chatId),
+    successMessage: 'Chat duplicated successfully.',
+    errorMessage: 'Failed to duplicate chat.',
+  })
+}
+
+const downloadChatAsHTML = async () => {
+  const chatId = activeChat.value?.id
+  if (!chatId) return
+  await runChatAction({
+    action: 'html',
+    execute: () => chatStore.downloadChatAsHTML(chatId),
+    successMessage: 'Chat exported as HTML successfully.',
+    errorMessage: 'Failed to export chat as HTML.',
+  })
+}
+
+const downloadChatAsZIP = async () => {
+  const chat = activeChat.value
+  if (!chat?.id) return
+  await runChatAction({
+    action: 'zip',
+    execute: () => chatStore.downloadChatAsZIP(chat.id, chat.title),
+    successMessage: 'Chat exported as ZIP successfully.',
+    errorMessage: 'Failed to export chat as ZIP.',
+  })
 }
 
 const openChatSettings = () => {
@@ -264,6 +352,9 @@ const handleResend = (messageId) => {
   padding: 12px 24px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  background-color: var(--bg-color);
 }
 
 .chat-title {

@@ -80,6 +80,33 @@ function cloneChatMeta(meta) {
   }
 }
 
+function sanitizeDownloadBaseName(title) {
+  return (
+    String(title || 'chat')
+      .trim()
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .split('')
+      .filter((character) => character.charCodeAt(0) > 31)
+      .join('')
+      .replace(/\s+/g, '_')
+      .slice(0, 100) || 'chat'
+  )
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  try {
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+  } finally {
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+}
+
 function normalizeModelGroups(input) {
   if (!Array.isArray(input)) return []
   if (input.every((item) => typeof item === 'string')) {
@@ -1063,36 +1090,29 @@ export const useChatStore = defineStore('chat', {
     },
 
     async duplicateChat(chatId) {
-      try {
-        const { newChatId } = await db.cloneChat(chatId)
-        await this.refreshChatList()
-        await this.loadChat(newChatId)
-      } catch (error) {
-        console.error('Failed to duplicate chat:', error)
-        showErrorToast('Failed to duplicate chat.')
-      }
+      const { newChatId } = await db.cloneChat(chatId)
+      await this.refreshChatList()
+      await this.loadChat(newChatId)
     },
 
-    async downloadChatAsHTML() {
-      if (!this.chatState.active) return
-      try {
-        const htmlContent = await exportChatAsHTML(
-          this.chatState.active.meta,
-          this.activeMessages
-        )
-        const blob = new Blob([htmlContent], { type: 'text/html' })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${(this.chatState.active.meta.title || 'chat').replace(/\s/g, '_')}.html`
-        document.body.appendChild(a)
-        a.click()
-        document.body.removeChild(a)
-        URL.revokeObjectURL(url)
-      } catch (error) {
-        console.error('Failed to download chat as HTML:', error)
-        showErrorToast('Failed to download chat as HTML.')
+    async downloadChatAsHTML(chatId) {
+      const active = this.chatState.active
+      if (!active || active.meta.id !== chatId) {
+        throw new Error('Chat is no longer active')
       }
+      const chat = cloneChatMeta(active.meta)
+      const messages = [...active.messages]
+      const htmlContent = await exportChatAsHTML(chat, messages)
+      const blob = new Blob([htmlContent], { type: 'text/html' })
+      downloadBlob(blob, `${sanitizeDownloadBaseName(chat.title)}.html`)
+    },
+
+    async downloadChatAsZIP(chatId, title) {
+      const blob = await db.exportArchive({
+        kind: 'selected',
+        chatIds: [chatId],
+      })
+      downloadBlob(blob, `${sanitizeDownloadBaseName(title)}.zip`)
     },
 
     async _executeGeneration({
