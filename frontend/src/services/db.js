@@ -548,6 +548,7 @@ export async function updateChatMetadata(chatId, patch = {}) {
   const updated = { ...chat, ...patch, lastModified: now() }
   await store.put(updated)
   await tx.done
+  return updated
 }
 
 export async function getChatDetails(chatId) {
@@ -791,7 +792,11 @@ export async function deleteMessages(chatId, messageIds) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readwrite')
   const store = tx.store
-  const chat = await ensureChat(store, chatId)
+  const chat = await store.get(chatId)
+  if (!chat || chat.type !== TYPE_CHAT) {
+    await tx.done
+    return
+  }
 
   for (const messageId of messageIds) {
     const range = IDBKeyRange.bound(

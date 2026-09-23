@@ -159,6 +159,7 @@ export const useChatStore = defineStore('chat', {
     chatState: {
       list: [],
       active: null, // { meta, messages }
+      deletingIds: [],
     },
     generationState: {
       status: GenerationStatus.IDLE,
@@ -527,19 +528,22 @@ export const useChatStore = defineStore('chat', {
 
     async _persistActiveMessage(message, options = {}) {
       if (!this.chatState.active || !message) return false
+      const chatId = this.chatState.active.meta.id
       const isStreaming = message.status === 'streaming'
       setContentStreamingState(message, isStreaming)
       syncContentRuntimeFromMessage(message)
       message.updatedAt = Date.now()
       try {
-        await db.updateMessage(this.chatState.active.meta.id, toRaw(message))
+        await db.updateMessage(chatId, toRaw(message))
+        if (!this._isActiveChat(chatId)) return false
 
         // For edited messages, reload attachments from DB to ensure Blob consistency
         if (options.reloadAttachments) {
           const hydratedMessage = await this._loadMessageFromDb(
-            this.chatState.active.meta.id,
+            chatId,
             message.id
           )
+          if (!this._isActiveChat(chatId)) return false
           if (hydratedMessage) {
             this._replaceMessage(hydratedMessage)
             return true
@@ -580,7 +584,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     async loadChat(chatId) {
-      if (!chatId) return
+      if (!chatId || this.chatState.deletingIds.includes(chatId)) return
       this.cancelEditing()
       if (this.chatState.active?.meta?.id === chatId) {
         return
@@ -591,6 +595,7 @@ export const useChatStore = defineStore('chat', {
 
       try {
         const chatDetails = await db.getChatDetails(chatId)
+        if (this.chatState.deletingIds.includes(chatId)) return
         if (!chatDetails) throw new Error('Chat not found')
         const { messages, autoMessages, settings, ...chatMeta } = chatDetails
         this.chatState.active = {
@@ -764,6 +769,7 @@ export const useChatStore = defineStore('chat', {
         }
         ensureContentRuntime(message).isReady = true
         await this._persistActiveMessage(message)
+        if (this.generationState.stream !== stream) return
         this._setGenerationState(GenerationStatus.IDLE)
         this._touchActiveChat()
         return
@@ -805,6 +811,7 @@ export const useChatStore = defineStore('chat', {
       }
 
       await this._persistActiveMessage(message)
+      if (this.generationState.stream !== stream) return
       this._setGenerationState(GenerationStatus.IDLE)
       this._touchActiveChat()
     },
@@ -830,6 +837,7 @@ export const useChatStore = defineStore('chat', {
       ensureContentRuntime(message).isReady = true
 
       await this._persistActiveMessage(message)
+      if (this.generationState.stream !== stream) return
       this._setGenerationState(GenerationStatus.ERROR, null, rawError)
 
       showErrorToast(
@@ -872,7 +880,7 @@ export const useChatStore = defineStore('chat', {
         return false
       }
 
-      if (isActiveChat) {
+      if (this._isActiveChat(chatId)) {
         this._touchActiveChat()
       }
       return true
@@ -900,7 +908,11 @@ export const useChatStore = defineStore('chat', {
     },
 
     _isActiveChat(chatId) {
-      return !!chatId && this.chatState.active?.meta?.id === chatId
+      return (
+        !!chatId &&
+        !this.chatState.deletingIds.includes(chatId) &&
+        this.chatState.active?.meta?.id === chatId
+      )
     },
 
     async _normalizeActiveHistory() {
@@ -1071,21 +1083,46 @@ export const useChatStore = defineStore('chat', {
     },
 
     async deleteChat(chatId) {
-      const chatIndex = this.chatState.list.findIndex((c) => c.id === chatId)
-      if (chatIndex === -1) return
-
-      const deletedChat = this.chatState.list[chatIndex]
-      this.chatState.list.splice(chatIndex, 1)
+      if (this.chatState.deletingIds.includes(chatId)) return
+      if (!this.chatState.list.some((chat) => chat.id === chatId)) return
+      this.chatState.deletingIds.push(chatId)
 
       try {
+        if (this.generationState.stream?.chatId === chatId) {
+          await this.cancelGeneration()
+        }
         await db.deleteChat(chatId)
+        this.chatState.list = this.chatState.list.filter(
+          (chat) => chat.id !== chatId
+        )
+        useChatConfigStore().clearChatSettings(chatId)
         if (this.chatState.active?.meta?.id === chatId) {
-          this.prepareNewChat()
+          await this.prepareNewChat()
         }
       } catch (error) {
         console.error('Failed to delete chat:', error)
         showErrorToast('Failed to delete chat.')
-        this.chatState.list.splice(chatIndex, 0, deletedChat)
+      } finally {
+        this.chatState.deletingIds = this.chatState.deletingIds.filter(
+          (id) => id !== chatId
+        )
+      }
+    },
+
+    async saveChatSettings(chatId, title) {
+      if (!chatId || this.chatState.deletingIds.includes(chatId)) return
+      const config = useChatConfigStore()
+      await config.persistSettings(chatId)
+      await config.persistAutoMessages(chatId)
+      const trimmedTitle = title?.trim()
+      const meta = await db.updateChatMetadata(
+        chatId,
+        trimmedTitle ? { title: trimmedTitle } : {}
+      )
+      if (this.chatState.deletingIds.includes(chatId)) return
+      this._ensureChatListEntry(meta)
+      if (this._isActiveChat(chatId)) {
+        this.chatState.active.meta = { ...this.chatState.active.meta, ...meta }
       }
     },
 
@@ -1152,6 +1189,7 @@ export const useChatStore = defineStore('chat', {
           currentStream?.messageId === modelMessage.id
 
         if (
+          this.chatState.deletingIds.includes(chatId) ||
           activeChatId !== chatId ||
           this.generationState.status !== GenerationStatus.STREAMING ||
           !isSameRequest ||
@@ -1166,6 +1204,7 @@ export const useChatStore = defineStore('chat', {
         recordDebugRequest(payload)
         startGeneration(payload)
       } catch (error) {
+        if (this.generationState.stream?.requestId !== requestId) return
         console.error('Failed to start generation:', error)
         showErrorToast('Failed to send message. Please try again.')
 
@@ -1176,6 +1215,8 @@ export const useChatStore = defineStore('chat', {
     },
 
     async sendMessage() {
+      if (this.chatState.deletingIds.includes(this.chatState.active?.meta?.id))
+        return
       const prompt = this.composerState.prompt || ''
       let requestConfig = this.currentRequestConfig
 
@@ -1274,6 +1315,7 @@ export const useChatStore = defineStore('chat', {
           requestConfig,
         })
       } catch (error) {
+        if (chatId && !this._isActiveChat(chatId)) return
         console.error('Failed to setup message:', error)
         showErrorToast('Failed to setup message. Please try again.')
         this._setGenerationState(GenerationStatus.ERROR, null, error)
@@ -1421,6 +1463,7 @@ export const useChatStore = defineStore('chat', {
           requestConfig,
         })
       } catch (error) {
+        if (!this._isActiveChat(chatId)) return
         console.error('Failed to resend message:', error)
         const message =
           error?.message ||

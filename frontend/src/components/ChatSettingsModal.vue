@@ -250,7 +250,12 @@
         <button class="secondary-button" type="button" @click="closeModal">
           Cancel
         </button>
-        <button class="primary-button" type="button" @click="handleSave">
+        <button
+          class="primary-button"
+          type="button"
+          :disabled="isSaving"
+          @click="handleSave"
+        >
           Save
         </button>
       </div>
@@ -262,6 +267,7 @@
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 
+import { useChatStore } from '../stores/chat'
 import { useChatConfigStore } from '../stores/chatConfig'
 import {
   createAttachmentBucket,
@@ -284,6 +290,8 @@ const props = defineProps({
 })
 
 const chatConfigStore = useChatConfigStore()
+const chatStore = useChatStore()
+const isSaving = ref(false)
 
 const activeSettings = computed(() => chatConfigStore.activeSettings)
 
@@ -529,6 +537,10 @@ const autoAttachmentLimitLabel = computed(() =>
 )
 
 const handleSave = async () => {
+  if (isSaving.value) return
+  isSaving.value = true
+  const chatId = chatConfigStore.activeChatId
+  const title = form.title
   chatConfigStore.updateSystemPrompt(form.systemPrompt)
   chatConfigStore.updateTransformSource(form.transformScript)
 
@@ -538,9 +550,8 @@ const handleSave = async () => {
   chatConfigStore.updateAutoMessages('post', postDrafts)
 
   try {
-    if (chatConfigStore.activeChatId) {
-      await chatConfigStore.persistSettings(chatConfigStore.activeChatId)
-      await chatConfigStore.persistAutoMessages(chatConfigStore.activeChatId)
+    if (chatId) {
+      await chatStore.saveChatSettings(chatId, title)
     }
 
     emit('save', {
@@ -553,6 +564,8 @@ const handleSave = async () => {
   } catch (error) {
     console.error('Failed to save chat settings:', error)
     showErrorToast('Failed to save chat settings. Please try again.')
+  } finally {
+    isSaving.value = false
   }
 }
 </script>
