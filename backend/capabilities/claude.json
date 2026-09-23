@@ -10,7 +10,7 @@
       "enabled": true,
       "allowRemoteUpload": false,
       "allowedMimes": [],
-      "maxInlineFileSize": 10485760
+      "maxInlineFileSize": 7000000
     },
     "parameters": {
       "maxOutputTokens": {

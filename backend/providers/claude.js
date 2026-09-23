@@ -122,9 +122,17 @@ function buildEffortParameter(meta) {
 }
 
 function applyClaudeModelMetadata(effective, meta) {
-  if (!effective || !meta) return effective
+  if (!effective) return effective
 
-  const capabilities = meta.capabilities || {}
+  // Current Claude models accept images. Missing metadata should not disable
+  // attachments, but an explicit unsupported flag takes precedence.
+  const capabilities = meta?.capabilities || {}
+  const mimes = []
+  if (capabilities.image_input?.supported !== false) mimes.push(...CLAUDE_IMAGE_MIMES)
+  if (isSupported(capabilities.pdf_input)) mimes.push(...CLAUDE_DOCUMENT_MIMES)
+  const attachments = mergeAllowedMimes(effective.attachments, mimes)
+  if (!meta) return { ...effective, attachments }
+
   const maxOutputTokens = positiveInteger(meta.max_tokens)
   const fallbackMaxOutputTokens = positiveInteger(
     effective.parameters?.maxOutputTokens?.ui?.range?.max
@@ -175,12 +183,6 @@ function applyClaudeModelMetadata(effective, meta) {
   const effortParameter = buildEffortParameter(meta)
   if (effortParameter) parameters.effort = effortParameter
   else delete parameters.effort
-
-  let attachments = { ...(effective.attachments || {}) }
-  const mimes = []
-  if (isSupported(capabilities.image_input)) mimes.push(...CLAUDE_IMAGE_MIMES)
-  if (isSupported(capabilities.pdf_input)) mimes.push(...CLAUDE_DOCUMENT_MIMES)
-  attachments = mergeAllowedMimes(attachments, mimes)
 
   return {
     ...effective,

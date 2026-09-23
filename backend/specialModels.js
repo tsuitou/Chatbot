@@ -1,6 +1,6 @@
 import { runAgentSession } from './agent/runner.js'
 
-const AGENT_BASE_MODEL = 'gemini-3.5-flash'
+const AGENT_BASE_MODEL = 'gemini-3.8-flash'
 
 const VIRTUAL_CAPABILITIES_BASE = {
   provider: 'virtual',
