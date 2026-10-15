@@ -11,7 +11,7 @@ import { eventFromParts } from './events.js'
 import {
   FLEX_TIMEOUT_MS,
   generationOptions,
-  tierMetadata,
+  geminiTierMetadata,
 } from './generationOptions.js'
 import { finishWriting, writingFunctionDeclaration } from './writing.js'
 import { buildGeminiContents, buildGeminiTools } from './geminiMapper.js'
@@ -154,7 +154,7 @@ export class GeminiProvider {
       for await (const chunk of stream) {
         const candidate = chunk?.candidates?.[0]
         const parts = candidate?.content?.parts || []
-        Object.assign(metadata, tierMetadata(chunk?.usageMetadata?.serviceTier))
+        Object.assign(metadata, geminiTierMetadata(chunk))
         if (candidate?.finishReason) finishReason = candidate.finishReason
         if (writing) {
           for (const part of parts) {
@@ -193,7 +193,7 @@ export class GeminiProvider {
     const result = await this.genAI.models.generateContent(sdkRequest)
     const candidate = result?.candidates?.[0]
     let parts = candidate?.content?.parts || []
-    const metadata = tierMetadata(result?.usageMetadata?.serviceTier)
+    const metadata = geminiTierMetadata(result)
     if (writing) {
       try {
         const output = finishWriting(

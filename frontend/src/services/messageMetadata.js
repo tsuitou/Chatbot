@@ -49,6 +49,9 @@ export function buildDisplayIndicators(message) {
   if (params.includeThoughts) {
     indicators.push({ icon: 'check', text: 'Include Thoughts' })
   }
+  if (params.writingFunctionCall === true) {
+    indicators.push({ icon: 'pen-nib', text: 'Writing FC' })
+  }
   for (const [key, value] of Object.entries(config.tools || {})) {
     if (!value || !TOOL_INDICATORS[key]) continue
     indicators.push(TOOL_INDICATORS[key])

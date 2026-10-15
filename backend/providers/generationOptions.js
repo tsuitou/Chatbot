@@ -27,9 +27,25 @@ export function generationOptions(parameters, definitions) {
 
 export function tierMetadata(value) {
   if (typeof value !== 'string') return {}
-  const tier = value.toLowerCase()
+  const tier = value.trim().toLowerCase()
   if (tier === 'default') return { serviceTier: 'standard' }
   return ['standard', 'flex', 'priority'].includes(tier)
     ? { serviceTier: tier }
     : {}
+}
+
+export function geminiTierMetadata(response) {
+  const usage = tierMetadata(response?.usageMetadata?.serviceTier)
+  if (usage.serviceTier) return usage
+
+  // Gemini can report the served tier only in the HTTP response headers.
+  // The SDK exposes a record; accept Headers too for compatibility.
+  const headers = response?.sdkHttpResponse?.headers
+  const value =
+    typeof headers?.get === 'function'
+      ? headers.get('x-gemini-service-tier')
+      : Object.entries(headers || {}).find(
+          ([name]) => name.toLowerCase() === 'x-gemini-service-tier'
+        )?.[1]
+  return tierMetadata(value)
 }

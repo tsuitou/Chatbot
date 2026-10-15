@@ -85,7 +85,7 @@
           <font-awesome-icon icon="paperclip" />
         </button>
         <button
-          v-if="supportsTool('urlContext')"
+          v-if="!writingFunctionCallEnabled && supportsTool('urlContext')"
           class="icon-button"
           :class="{ active: toolSettings.urlContext }"
           title="Enable Url Context"
@@ -94,7 +94,7 @@
           <font-awesome-icon icon="link" />
         </button>
         <button
-          v-if="supportsTool('grounding')"
+          v-if="!writingFunctionCallEnabled && supportsTool('grounding')"
           class="icon-button"
           :class="{ active: toolSettings.grounding }"
           title="Enable Search Grounding"
@@ -103,7 +103,7 @@
           <font-awesome-icon icon="search" />
         </button>
         <button
-          v-if="supportsTool('codeExecution')"
+          v-if="!writingFunctionCallEnabled && supportsTool('codeExecution')"
           class="icon-button"
           :class="{ active: toolSettings.codeExecution }"
           title="Enable Code Execution"
@@ -144,6 +144,9 @@ const prompt = computed({
 })
 
 const toolSettings = computed(() => store.composerState.tools)
+const writingFunctionCallEnabled = computed(
+  () => store.currentRequestConfig.parameters.writingFunctionCall === true
+)
 const supportsTool = (toolName) => {
   return store.currentToolDefinitions?.[toolName]?.enabled === true
 }
