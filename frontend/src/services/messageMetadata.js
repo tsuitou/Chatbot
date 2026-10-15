@@ -104,6 +104,29 @@ export function buildMetadataLines(
   if (usage.total != null) usageParts.push(`Total: ${escapeHtml(usage.total)}`)
 
   const detailSegments = []
+  if (params.serviceTier === 'flex' || metadata.serviceTier === 'flex') {
+    const tierLabels = {
+      flex: 'Flex',
+      standard: 'Standard',
+      priority: 'Priority',
+    }
+    detailSegments.push(
+      `Tier: ${tierLabels[metadata.serviceTier] || 'Unknown'}`
+    )
+  }
+  const writingLabels = {
+    used: 'Used',
+    not_used: 'Not used',
+    invalid: 'Invalid',
+    incomplete: 'Incomplete',
+  }
+  const writingStatus =
+    writingLabels[metadata.writingFunctionCall] ||
+    (metadata.writingFunctionCall === 'pending' &&
+    message.status === 'cancelled'
+      ? 'Incomplete'
+      : null)
+  if (writingStatus) detailSegments.push(`Writing FC: ${writingStatus}`)
   if (usageParts.length)
     detailSegments.push(`Tokens [ ${usageParts.join(', ')} ]`)
   if (metadata.finishReason) {

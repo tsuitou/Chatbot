@@ -22,6 +22,7 @@ export function normalizeDynamicParameters(capabilities) {
         key,
         label: definition.label || key,
         default: definition.default,
+        hint: definition.hint,
       }
 
       if (definition.type === 'enum') {
@@ -49,6 +50,7 @@ export function normalizeDynamicParameters(capabilities) {
       }
 
       const hintParts = [
+        ...(definition.hint ? [definition.hint] : []),
         ...specialValues.map((value) => `${value.label} (${value.value})`),
         ...(hasRange ? [`${definition.min} - ${definition.max}`] : []),
       ]

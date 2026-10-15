@@ -621,9 +621,16 @@ io.on('connection', (socket) => {
   console.log(connectionInfo)
 
   socket.on("disconnect", () => {
+    abortGeneration(activeGeneration, 'disconnected')
     updateConnectionInfo(socket.id, 'disconnect')
     console.log(connectionInfo)
   });
+
+  socket.on('cancel_generation', ({ chatId, requestId } = {}) => {
+    if (activeGeneration?.chatId === chatId && activeGeneration?.requestId === requestId) {
+      abortGeneration(activeGeneration, 'cancelled')
+    }
+  })
 
   socket.on('start_generation', async (data) => {
     const {
@@ -640,11 +647,12 @@ io.on('connection', (socket) => {
     } = data ?? {}
 
     abortGeneration(activeGeneration, 'superseded')
+    let generation = null
 
     const echoErr = (err) => {
       const status = numberOr(err?.status, 500)
       const message = err?.message || 'generation failed'
-      socket.emit('error', { error: message, message, status, chatId, requestId })
+      socket.emit('error', { error: message, message, status, chatId, requestId, metadata: err?.metadata })
     }
     updateConnectionInfo(socket.id, 'generating')
     console.log(connectionInfo)
@@ -666,8 +674,9 @@ io.on('connection', (socket) => {
       if (!providerInstance) throw new Error(`${providerId || 'Requested'} provider is not configured`)
       if (!Array.isArray(messages)) throw new Error('messages must be an array')
       const controller =
-        streaming && providerInstance.supportsStreamAbort ? new AbortController() : null
-      activeGeneration = {
+        providerInstance.supportsAbort || (streaming && providerInstance.supportsStreamAbort)
+          ? new AbortController() : null
+      activeGeneration = generation = {
         chatId,
         requestId,
         provider: providerId,
@@ -693,7 +702,7 @@ io.on('connection', (socket) => {
             try {
               await emitWithAck(socket, 'chunk', chunk)
             } catch (error) {
-              abortGeneration(activeGeneration, 'chunk_ack_timeout')
+              abortGeneration(generation, 'chunk_ack_timeout')
               const err = new Error('Frontend did not acknowledge streamed output.')
               err.status = 499
               err.cause = error
@@ -710,11 +719,11 @@ io.on('connection', (socket) => {
         socket.emit('end_generation', { ok: true, chatId, requestId })
       }
     } catch (error) {
-      if (activeGeneration?.controller?.signal.aborted) {
+      if (generation?.controller?.signal.aborted) {
         socket.emit('end_generation', {
           ok: false,
           aborted: true,
-          reason: activeGeneration.abortReason || 'aborted',
+          reason: generation.abortReason || 'aborted',
           chatId,
           requestId,
         })
@@ -723,9 +732,11 @@ io.on('connection', (socket) => {
       console.error('generation error:', error?.status, error?.message)
       echoErr(error)
     } finally {
-      activeGeneration = null
-      updateConnectionInfo(socket.id, 'connected')
-      console.log(connectionInfo)
+      if (activeGeneration === generation) {
+        activeGeneration = null
+        if (socket.connected) updateConnectionInfo(socket.id, 'connected')
+        console.log(connectionInfo)
+      }
     }
   })
 })

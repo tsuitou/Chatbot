@@ -30,6 +30,26 @@
       "maxInlineFileSize": 10485760
     },
     "parameters": {
+      "serviceTier": {
+        "default": "standard",
+        "ui": {
+          "type": "enum",
+          "label": "Service Tier",
+          "hint": "Flex costs less but may take longer or be unavailable.",
+          "options": [
+            { "label": "Standard", "value": "standard" },
+            { "label": "Flex", "value": "flex" }
+          ]
+        }
+      },
+      "writingFunctionCall": {
+        "default": false,
+        "ui": {
+          "type": "boolean",
+          "label": "Writing Function Call",
+          "hint": "Receive writing through a function call. Text appears when complete; other tools are paused."
+        }
+      },
       "temperature": {
         "ui": {
           "type": "number",
@@ -57,6 +77,39 @@
   },
   "models": [
     {
+      "modelQuery": "gemini-4-argon",
+      "parameters": {
+        "temperature": null,
+        "topP": null,
+        "maxOutputTokens": {
+          "default": 65536,
+          "ui": {
+            "type": "integer",
+            "label": "Max Output Tokens",
+            "range": { "min": 1, "max": 65536 }
+          },
+          "api": { "path": "maxOutputTokens" }
+        },
+        "thinkingLevel": {
+          "default": "medium",
+          "ui": {
+            "type": "enum",
+            "label": "Thinking Level",
+            "options": [
+              { "label": "Low", "value": "low" },
+              { "label": "Medium (Default)", "value": "medium" },
+              { "label": "High", "value": "high" }
+            ]
+          },
+          "api": { "path": "thinkingConfig.thinkingLevel" }
+        },
+        "includeThoughts": {
+          "ui": { "type": "boolean", "label": "Include Thoughts" },
+          "api": { "path": "thinkingConfig.includeThoughts" }
+        }
+      }
+    },
+    {
       "modelQuery": "image",
       "priority": 1,
       "features": {
@@ -68,6 +121,8 @@
         "codeExecution": { "enabled": false }
       },
       "parameters": {
+        "serviceTier": null,
+        "writingFunctionCall": null,
         "temperature": null,
         "topP": null,
         "maxOutputTokens": null,
@@ -125,6 +180,8 @@
         "codeExecution": { "enabled": false }
       },
       "parameters": {
+        "serviceTier": null,
+        "writingFunctionCall": null,
         "temperature": null,
         "topP": null,
         "maxOutputTokens": null,

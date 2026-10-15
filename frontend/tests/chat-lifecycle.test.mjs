@@ -25,6 +25,7 @@ function setup(db = {}) {
     defineStore: (_, definition) => definition,
     db,
     useChatConfigStore: () => config,
+    cancelBackendGeneration: () => {},
     showErrorToast: () => events.push('error'),
     console: { error() {}, warn() {} },
     ensureContentRuntime: (message) => (message.runtime ||= {}),

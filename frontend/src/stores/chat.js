@@ -4,7 +4,11 @@ import { v4 as uuidv4 } from 'uuid'
 import * as db from '../services/db'
 import * as apiAdapter from '../services/apiAdapter'
 import { getModelCapabilities, uploadFile } from '../services/api'
-import { registerSocketHandlers, startGeneration } from '../services/socket'
+import {
+  registerSocketHandlers,
+  startGeneration,
+  cancelBackendGeneration,
+} from '../services/socket'
 import { showErrorToast } from '../services/notification'
 import { exportChatAsHTML } from '../services/htmlExporter'
 import {
@@ -234,7 +238,10 @@ export const useChatStore = defineStore('chat', {
       const activeChatId = state.chatState.active?.meta?.id || null
       const systemInstruction = chatConfigStore.getSystemPrompt(activeChatId)
       const toolDefinitions = this.currentToolDefinitions
-      const tools = enabledTools(state.composerState.tools, toolDefinitions)
+      const tools =
+        settings.parameters.writingFunctionCall === true
+          ? {}
+          : enabledTools(state.composerState.tools, toolDefinitions)
       return {
         providerId,
         model,
@@ -827,6 +834,10 @@ export const useChatStore = defineStore('chat', {
       message.status = 'completed'
       message.metadata = {
         ...message.metadata,
+        ...(message.configSnapshot?.parameters?.writingFunctionCall === true
+          ? { writingFunctionCall: 'incomplete' }
+          : {}),
+        ...rawError?.metadata,
         finishReason: 'error',
         error: rawError?.error || rawError?.message || 'Unknown error',
       }
@@ -852,6 +863,8 @@ export const useChatStore = defineStore('chat', {
       const chatId = stream?.chatId || this.chatState.active.meta.id
       // Flip to IDLE first so any late chunks for this request are ignored.
       this._setGenerationState(GenerationStatus.IDLE)
+
+      cancelBackendGeneration({ chatId, requestId: stream?.requestId })
 
       const messageId = stream?.messageId
       if (!messageId) return

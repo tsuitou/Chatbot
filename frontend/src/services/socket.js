@@ -108,4 +108,10 @@ export const startGeneration = (payload) => {
   }
 }
 
+export const cancelBackendGeneration = ({ chatId, requestId }) => {
+  if (socket.connected && requestId) {
+    socket.emit('cancel_generation', { chatId, requestId })
+  }
+}
+
 export default socket

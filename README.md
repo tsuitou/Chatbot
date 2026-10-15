@@ -58,6 +58,24 @@ Run the following command in your terminal:
 ## Note on Data Management
 The application uses the browser's IndexedDB to store data. Please be aware that data may be deleted due to browser settings or storage cleanup operations.
 
+## Gemini Generation Settings
+
+In **Settings → Generation Parameters**, configure each text Gemini model,
+including Gemini through OpenRouter:
+
+- **Service Tier**: Standard (default) or Flex. Flex allows longer waits and
+  uses only Flex endpoints on OpenRouter; unavailable Flex routes fail instead
+  of switching to Standard. Stop cancels the pending client request.
+- **Writing Function Call**: off by default. Requires writing through a function
+  call, then displays and saves the completed text as a normal model message.
+  Other tools are paused for that request, and writing appears when complete.
+- Metadata adds only `Tier: Flex` (or `Unknown` when unreported) and
+  `Writing FC: Used`, with failure labels when needed. Save and Reset use the
+  existing model-specific settings.
+
+Run the mocked provider, settings, history and cancellation tests with
+`node --test backend/tests/*.test.mjs frontend/tests/*.test.mjs` from the source root.
+
 ## Regarding Behavior
 * The system prompt saved in the model settings on the frontend is applied as a chat-specific setting when a new chat is created. Within a chat, the chat-specific system prompt is always used.
 * The backend system prompt behavior is controlled by `SYSTEM_INSTRUCTION_MODE` in `.env`:

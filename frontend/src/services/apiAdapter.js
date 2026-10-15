@@ -34,9 +34,13 @@ async function buildCanonicalParts(message, { allowRemoteUpload = true } = {}) {
     }
   }
 
-  let thoughtSignatures = Array.isArray(message?.metadata?.thoughtSignatures)
-    ? message.metadata.thoughtSignatures
-    : []
+  const flattenedWriting =
+    message?.metadata?.writingFunctionCall ||
+    message?.configSnapshot?.parameters?.writingFunctionCall === true
+  let thoughtSignatures =
+    !flattenedWriting && Array.isArray(message?.metadata?.thoughtSignatures)
+      ? message.metadata.thoughtSignatures
+      : []
   // Entries with partIndex are from the old accumulator, whose streaming path
   // (every chunk-relative partIndex is 0) prepended chunks and stored the list
   // newest-first. Restore oldest-first so the mapper's "last entry is the

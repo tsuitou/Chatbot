@@ -270,7 +270,13 @@ function prepareRequestMessages({
   // Interrupted model messages carry no persisted usable content, so keep them
   // out of the request history sent to the provider.
   const history = (historyMessages || []).filter(
-    (message) => !isInvalidModelHistoryMessage(message)
+    (message) =>
+      !isInvalidModelHistoryMessage(message) &&
+      !(
+        message.sender === 'model' &&
+        message.metadata?.writingFunctionCall &&
+        message.metadata.writingFunctionCall !== 'used'
+      )
   )
   return [...preAuto, ...history, ...postAuto]
 }

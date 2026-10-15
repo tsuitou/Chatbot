@@ -100,7 +100,7 @@ export function eventFromParts({
         data,
       })
     }
-    if (part?.thoughtSignature) {
+    if (part?.thoughtSignature && !part.functionCall) {
       const signature = String(part.thoughtSignature)
       if (!seenSignatures.has(signature)) {
         seenSignatures.add(signature)

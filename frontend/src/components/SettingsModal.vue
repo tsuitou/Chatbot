@@ -162,7 +162,12 @@
                     v-model="currentSettings.parameters[param.key]"
                     type="checkbox"
                   />
-                  <span>{{ param.label || param.key }}</span>
+                  <span>
+                    {{ param.label || param.key }}
+                    <span v-if="param.hint" class="form-hint">
+                      {{ param.hint }}
+                    </span>
+                  </span>
                 </label>
 
                 <!-- Enum Select -->
@@ -171,6 +176,7 @@
                   :id="param.key"
                   v-model="currentSettings.parameters[param.key]"
                   class="select-input"
+                  @change="onParameterChange(param.key)"
                 >
                   <option :value="undefined">
                     {{ parameterDefaultOptionLabel(param) }}
@@ -304,9 +310,21 @@ const providerRoutingOptions = computed(() => {
   const options =
     modelCapabilities.value?.routing?.providerSelection?.options || []
   return Array.isArray(options)
-    ? options.filter((option) => option?.id && option?.label)
+    ? options.filter((option) => {
+        if (!option?.id || !option?.label) return false
+        if (!modelCapabilities.value?.parameters?.serviceTier) return true
+        const tier = currentSettings.value.parameters.serviceTier || 'standard'
+        return (option.serviceTier || 'standard') === tier
+      })
     : []
 })
+
+const onParameterChange = (key) => {
+  if (key === 'serviceTier') {
+    // A provider chosen for Standard may not offer Flex (and vice versa).
+    currentSettings.value.routing.providerChoice = ''
+  }
+}
 
 const supportsProviderRouting = computed(() => {
   return providerRoutingOptions.value.length > 0

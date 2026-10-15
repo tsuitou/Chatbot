@@ -54,5 +54,36 @@
       }
     }
   },
-  "models": []
+  "models": [
+    {
+      "modelQuery": "google/gemini-",
+      "parameters": {
+        "serviceTier": {
+          "default": "standard",
+          "ui": {
+            "type": "enum",
+            "label": "Service Tier",
+            "hint": "Flex costs less but may take longer or be unavailable.",
+            "options": [
+              { "label": "Standard", "value": "standard" },
+              { "label": "Flex", "value": "flex" }
+            ]
+          }
+        },
+        "writingFunctionCall": {
+          "default": false,
+          "ui": {
+            "type": "boolean",
+            "label": "Writing Function Call",
+            "hint": "Receive writing through a function call. Text appears when complete; other tools are paused."
+          }
+        }
+      }
+    },
+    {
+      "modelQuery": "image",
+      "priority": 1,
+      "parameters": { "serviceTier": null, "writingFunctionCall": null }
+    }
+  ]
 }

@@ -7,9 +7,18 @@ import {
   loadCapabilities,
 } from './capabilities.js'
 import { buildProviderConfig } from './configBuilder.js'
-import { eventFromParts, geminiEvent } from './events.js'
+import { eventFromParts } from './events.js'
+import {
+  FLEX_TIMEOUT_MS,
+  generationOptions,
+  tierMetadata,
+} from './generationOptions.js'
+import { finishWriting, writingFunctionDeclaration } from './writing.js'
 import { buildGeminiContents, buildGeminiTools } from './geminiMapper.js'
-import { normalizeGeminiUsage, supportsServerSideToolInvocations } from './shared.js'
+import {
+  normalizeGeminiUsage,
+  supportsServerSideToolInvocations,
+} from './shared.js'
 import {
   normalizeSystemInstructionMode,
   resolveSystemInstruction,
@@ -23,14 +32,24 @@ export class GeminiProvider {
     const { capabilitiesPath, systemInstructionMode } = options
     this.genAI = new GoogleGenAI({ apiKey })
     this.defaultSystemInstruction = systemInstruction
-    this.systemInstructionMode =
-      normalizeSystemInstructionMode(systemInstructionMode)
-    this.capabilities = loadCapabilities('gemini', capabilitiesPath, runtimeDirname);
+    this.systemInstructionMode = normalizeSystemInstructionMode(
+      systemInstructionMode
+    )
+    this.capabilities = loadCapabilities(
+      'gemini',
+      capabilitiesPath,
+      runtimeDirname
+    )
     this.label = this.capabilities?.label ?? 'Gemini'
     this.modelDetailsCache = new Map()
+    this.supportsStreamAbort = true
+    this.supportsAbort = true
   }
 
-  setDefaultSystemInstruction(systemInstruction, mode = this.systemInstructionMode) {
+  setDefaultSystemInstruction(
+    systemInstruction,
+    mode = this.systemInstructionMode
+  ) {
     this.defaultSystemInstruction = systemInstruction
     this.systemInstructionMode = normalizeSystemInstructionMode(mode)
   }
@@ -38,8 +57,31 @@ export class GeminiProvider {
   _buildConfig(modelName, request) {
     const requestParameters = request?.parameters || {}
     const tools = request?.tools || {}
-    const { parameters: effectiveParameters, features, tools: effectiveTools } = getEffectiveCapabilities(this.capabilities, modelName)
-    const finalConfig = buildProviderConfig(effectiveParameters, requestParameters)
+    const {
+      parameters: effectiveParameters,
+      features,
+      tools: effectiveTools,
+    } = getEffectiveCapabilities(this.capabilities, modelName)
+    const finalConfig = buildProviderConfig(
+      effectiveParameters,
+      requestParameters
+    )
+    const { serviceTier, writing } = generationOptions(
+      requestParameters,
+      effectiveParameters
+    )
+    if (serviceTier) finalConfig.serviceTier = serviceTier
+    if (serviceTier === 'flex') {
+      finalConfig.httpOptions = {
+        timeout: FLEX_TIMEOUT_MS,
+        retryOptions: {
+          attempts: 3,
+          initialDelay: 2,
+          httpStatusCodes: [429, 503],
+        },
+      }
+    }
+    if (request.signal) finalConfig.abortSignal = request.signal
 
     const systemInstruction = resolveSystemInstruction({
       defaultSystemInstruction: this.defaultSystemInstruction,
@@ -63,7 +105,21 @@ export class GeminiProvider {
       }
     }
 
-    return finalConfig;
+    if (writing) {
+      // Writing is a terminal output operation. Built-in tools remain saved in
+      // the composer, but are not sent for this request.
+      finalConfig.tools = [
+        { functionDeclarations: [writingFunctionDeclaration()] },
+      ]
+      finalConfig.toolConfig = {
+        functionCallingConfig: {
+          mode: 'ANY',
+          allowedFunctionNames: ['submit_writing'],
+        },
+      }
+    }
+
+    return finalConfig
   }
 
   _buildRequest(request) {
@@ -76,29 +132,99 @@ export class GeminiProvider {
   }
 
   async *generateStream(request) {
-    const sdkRequest = this._buildRequest(request);
-
-    const stream = await this.genAI.models.generateContentStream(sdkRequest);
-    for await (const chunk of stream) {
-        yield geminiEvent({ chatId: request.chatId, requestId: request.requestId, chunk })
+    const sdkRequest = this._buildRequest(request)
+    const writing =
+      sdkRequest.config.toolConfig?.functionCallingConfig?.mode === 'ANY'
+    const calls = []
+    let finishReason
+    const metadata = writing ? { writingFunctionCall: 'pending' } : {}
+    const emit = (chunk, parts) =>
+      eventFromParts({
+        chatId: request.chatId,
+        requestId: request.requestId,
+        provider: 'gemini',
+        parts,
+        metadata: { ...metadata },
+        usage: normalizeGeminiUsage(chunk?.usageMetadata),
+        finishReason: chunk?.candidates?.[0]?.finishReason,
+        grounding: chunk?.candidates?.[0]?.groundingMetadata,
+      })
+    try {
+      const stream = await this.genAI.models.generateContentStream(sdkRequest)
+      for await (const chunk of stream) {
+        const candidate = chunk?.candidates?.[0]
+        const parts = candidate?.content?.parts || []
+        Object.assign(metadata, tierMetadata(chunk?.usageMetadata?.serviceTier))
+        if (candidate?.finishReason) finishReason = candidate.finishReason
+        if (writing) {
+          for (const part of parts) {
+            if (part.functionCall) calls.push(part.functionCall)
+          }
+          // Never attach a function-call signature to flattened text history.
+          yield emit(
+            chunk,
+            parts
+              .filter((p) => p.thought && p.text)
+              .map((p) => ({ text: p.text, thought: true }))
+          )
+        } else {
+          yield emit(chunk, parts)
+        }
+      }
+      if (writing) {
+        const result = finishWriting(calls, finishReason, ['STOP'])
+        Object.assign(metadata, result.metadata)
+        yield emit(null, result.parts)
+      }
+    } catch (error) {
+      error.metadata = {
+        ...metadata,
+        ...(writing ? { writingFunctionCall: 'incomplete' } : {}),
+        ...error.metadata,
+      }
+      throw error
     }
   }
-  
+
   async generate(request) {
-     const sdkRequest = this._buildRequest(request);
-     
-     const result = await this.genAI.models.generateContent(sdkRequest);
-     return eventFromParts({
-          chatId: request.chatId,
-          requestId: request.requestId,
-          provider: 'gemini',
-          parts: result?.candidates?.[0]?.content?.parts,
-          usage: normalizeGeminiUsage(result?.usageMetadata),
-          finishReason: result?.candidates?.[0]?.finishReason,
-          grounding: result?.candidates?.[0]?.groundingMetadata,
-     })
+    const sdkRequest = this._buildRequest(request)
+    const writing =
+      sdkRequest.config.toolConfig?.functionCallingConfig?.mode === 'ANY'
+    const result = await this.genAI.models.generateContent(sdkRequest)
+    const candidate = result?.candidates?.[0]
+    let parts = candidate?.content?.parts || []
+    const metadata = tierMetadata(result?.usageMetadata?.serviceTier)
+    if (writing) {
+      try {
+        const output = finishWriting(
+          parts.filter((p) => p.functionCall).map((p) => p.functionCall),
+          candidate?.finishReason,
+          ['STOP']
+        )
+        parts = [
+          ...parts
+            .filter((p) => p.thought && p.text)
+            .map((p) => ({ text: p.text, thought: true })),
+          ...output.parts,
+        ]
+        Object.assign(metadata, output.metadata)
+      } catch (error) {
+        error.metadata = { ...metadata, ...error.metadata }
+        throw error
+      }
+    }
+    return eventFromParts({
+      chatId: request.chatId,
+      requestId: request.requestId,
+      provider: 'gemini',
+      parts,
+      metadata,
+      usage: normalizeGeminiUsage(result?.usageMetadata),
+      finishReason: result?.candidates?.[0]?.finishReason,
+      grounding: result?.candidates?.[0]?.groundingMetadata,
+    })
   }
-  
+
   async uploadFile(path, mimeType, displayName) {
       const uploaded = await this.genAI.files.upload({
           file: path,
