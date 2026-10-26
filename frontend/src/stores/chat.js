@@ -9,7 +9,7 @@ import {
   startGeneration,
   cancelBackendGeneration,
 } from '../services/socket'
-import { showErrorToast } from '../services/notification'
+import { showErrorToast, showWarningToast } from '../services/notification'
 import { exportChatAsHTML } from '../services/htmlExporter'
 import {
   normalizeSettingsEntry,
@@ -273,6 +273,22 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    // Unsupported attachments stay in the chat but are left out of the
+    // request, so switching back to a capable model sends them again.
+    _withoutUnsupportedAttachments(messages) {
+      const bucket = this.composerState.attachmentBucket
+      let skipped = 0
+      const sendable = messages.map((message) => {
+        const attachments = message.attachments || []
+        const kept = attachments.filter((att) => !bucket?.isUnsupported?.(att))
+        skipped += attachments.length - kept.length
+        return kept.length === attachments.length
+          ? message
+          : { ...message, attachments: kept }
+      })
+      return { messages: sendable, skipped }
+    },
+
     _createAttachmentBucket(options = {}) {
       return createAttachmentBucket({
         ...options,
@@ -470,6 +486,16 @@ export const useChatStore = defineStore('chat', {
       this._ensureChatListEntry(updated)
     },
 
+    _applyChatMeta(meta) {
+      this._ensureChatListEntry(meta)
+      if (this._isActiveChat(meta?.id)) {
+        this.chatState.active.meta = cloneChatMeta({
+          ...this.chatState.active.meta,
+          ...meta,
+        })
+      }
+    },
+
     _setActiveMessages(messages) {
       if (!this.chatState.active) return
       this.chatState.active.messages = hydrateMessages(messages)
@@ -541,7 +567,9 @@ export const useChatStore = defineStore('chat', {
       syncContentRuntimeFromMessage(message)
       message.updatedAt = Date.now()
       try {
-        await db.updateMessage(chatId, toRaw(message))
+        await db.updateMessage(chatId, toRaw(message), {
+          touchChat: options.touchChat ?? true,
+        })
         if (!this._isActiveChat(chatId)) return false
 
         // For edited messages, reload attachments from DB to ensure Blob consistency
@@ -587,7 +615,8 @@ export const useChatStore = defineStore('chat', {
       }
       if (!changed) return
       message.uiFlags = current
-      void this._persistActiveMessage(message)
+      // Display-only state; don't let it reorder the chat list.
+      void this._persistActiveMessage(message, { touchChat: false })
     },
 
     async loadChat(chatId) {
@@ -850,6 +879,7 @@ export const useChatStore = defineStore('chat', {
       await this._persistActiveMessage(message)
       if (this.generationState.stream !== stream) return
       this._setGenerationState(GenerationStatus.ERROR, null, rawError)
+      this._touchActiveChat()
 
       showErrorToast(
         rawError?.error || rawError?.message || 'An unexpected error occurred.'
@@ -990,10 +1020,8 @@ export const useChatStore = defineStore('chat', {
         return
       }
 
-      const allAttachments = this.editingState.attachmentBucket.list()
-      const attachments = allAttachments.filter(
-        (item) => !this.editingState.attachmentBucket.isUnsupported?.(item)
-      )
+      // Keep unsupported attachments; they are only left out when sending.
+      const attachments = this.editingState.attachmentBucket.list()
 
       const updated = {
         ...message,
@@ -1047,27 +1075,26 @@ export const useChatStore = defineStore('chat', {
     },
 
     async updateTitle(newTitle) {
-      if (
-        !this.chatState.active ||
-        this.chatState.active.meta.title === newTitle
-      )
+      const chatId = this.chatState.active?.meta?.id
+      const title = newTitle?.trim()
+      if (!chatId || !title || this.chatState.active.meta.title === title)
         return
 
       const oldTitle = this.chatState.active.meta.title
-      this.chatState.active.meta.title = newTitle
-      const item = this.chatState.list.find(
-        (c) => c.id === this.chatState.active.meta.id
-      )
-      if (item) item.title = newTitle
+      this.chatState.active.meta.title = title
+      const item = this.chatState.list.find((c) => c.id === chatId)
+      if (item) item.title = title
 
       try {
-        await db.updateChatMetadata(this.chatState.active.meta.id, {
-          title: newTitle,
-        })
+        const meta = await db.updateChatMetadata(chatId, { title })
+        if (this.chatState.deletingIds.includes(chatId)) return
+        this._applyChatMeta(meta)
       } catch (error) {
         console.error('Failed to update title:', error)
         showErrorToast('Failed to update chat title.')
-        this.chatState.active.meta.title = oldTitle
+        if (this._isActiveChat(chatId)) {
+          this.chatState.active.meta.title = oldTitle
+        }
         if (item) item.title = oldTitle
       }
     },
@@ -1084,7 +1111,12 @@ export const useChatStore = defineStore('chat', {
       }
 
       try {
-        await db.updateChatMetadata(chatId, { isBookmarked: newBookmarkState })
+        // Bookmarking isn't an edit, so keep the chat's position in history.
+        await db.updateChatMetadata(
+          chatId,
+          { isBookmarked: newBookmarkState },
+          { touch: false }
+        )
       } catch (error) {
         console.error('Failed to toggle bookmark:', error)
         showErrorToast('Failed to update bookmark.')
@@ -1133,10 +1165,7 @@ export const useChatStore = defineStore('chat', {
         trimmedTitle ? { title: trimmedTitle } : {}
       )
       if (this.chatState.deletingIds.includes(chatId)) return
-      this._ensureChatListEntry(meta)
-      if (this._isActiveChat(chatId)) {
-        this.chatState.active.meta = { ...this.chatState.active.meta, ...meta }
-      }
+      this._applyChatMeta(meta)
     },
 
     async duplicateChat(chatId) {
@@ -1183,10 +1212,18 @@ export const useChatStore = defineStore('chat', {
       this._touchActiveChat()
       this.bumpScrollSignal()
 
+      const { messages: sendableMessages, skipped } =
+        this._withoutUnsupportedAttachments(requestMessages)
+      if (skipped) {
+        showWarningToast(
+          `${skipped} attachment(s) not sent: unsupported by the current model.`
+        )
+      }
+
       try {
         const payload = await apiAdapter.createApiRequest({
           chatId,
-          messages: requestMessages,
+          messages: sendableMessages,
           model: requestConfig.model,
           requestConfig,
           streaming: requestConfig.streaming,
@@ -1254,10 +1291,7 @@ export const useChatStore = defineStore('chat', {
       }
 
       const chatConfigStore = useChatConfigStore()
-      const allAttachments = this.composerState.attachmentBucket.list()
-      const attachments = allAttachments.filter(
-        (item) => !this.composerState.attachmentBucket.isUnsupported?.(item)
-      )
+      const attachments = this.composerState.attachmentBucket.list()
       const tempMessageIds = []
       let chatId = null
 

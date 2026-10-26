@@ -302,6 +302,17 @@ export class ClaudeProvider {
         source: { type: 'base64', media_type: mimeType, data: part.data },
       }
     }
+    // Base64 document sources accept only PDFs; text goes in as plain text.
+    if (mimeType.startsWith('text/')) {
+      return {
+        type: 'document',
+        source: {
+          type: 'text',
+          media_type: 'text/plain',
+          data: Buffer.from(part.data, 'base64').toString('utf-8'),
+        },
+      }
+    }
     return {
       type: 'document',
       source: { type: 'base64', media_type: mimeType, data: part.data },

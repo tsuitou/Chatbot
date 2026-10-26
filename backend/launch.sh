@@ -20,9 +20,13 @@ cd "$(dirname "$0")"
 # Check dependencies
 if [ ! -d "node_modules" ]; then
     echo "Installing dependencies..."
-    npm install
+    if ! command -v pnpm &> /dev/null; then
+        echo "pnpm not found. Please install pnpm (https://pnpm.io/installation) and try again."
+        exit 1
+    fi
+    pnpm install --frozen-lockfile --prod
     if [ $? -ne 0 ]; then
-        echo "Failed to install dependencies. Please check your npm installation."
+        echo "Failed to install dependencies. Please check your pnpm installation."
         exit 1
     fi
     echo "Dependencies installed successfully."

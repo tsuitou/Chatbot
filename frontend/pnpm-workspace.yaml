@@ -1,0 +1,10 @@
+# サプライチェーン攻撃対策
+# 公開から3日 (分単位) 経過していないバージョンはインストールしない
+minimumReleaseAge: 4320
+# 推移的依存が git / tarball URL などレジストリ外を参照することを禁止
+# (xlsx は直接依存として SheetJS CDN の tarball を指定しているため対象外)
+blockExoticSubdeps: true
+# 公開者の信頼度 (provenance 等) が過去バージョンより下がった版を拒否
+trustPolicy: no-downgrade
+# install スクリプトは許可したパッケージのみ実行し、未承認があればエラー
+strictDepBuilds: true

@@ -143,8 +143,10 @@ function applyOpenRouterModelMetadata(base, meta) {
     ? meta.architecture.input_modalities
     : []
   const mimes = []
+  // Text attachments are inlined as plain text, so any text model takes them.
+  if (inputs.includes('text')) mimes.push('text/plain')
   if (inputs.includes('image')) mimes.push(...IMAGE_MIMES)
-  if (inputs.includes('file')) mimes.push('application/pdf', 'text/plain')
+  if (inputs.includes('file')) mimes.push('application/pdf')
   if (mimes.length) {
     base.attachments = {
       ...(base.attachments || {}),

@@ -22,9 +22,15 @@ cd /d "%~dp0"
 rem === Check dependencies ===
 if not exist "node_modules" (
   echo Installing dependencies...
-  call npm install
+  where pnpm >NUL 2>&1
   if errorlevel 1 (
-    echo Failed to install dependencies. Please check your npm installation.
+    echo pnpm not found. Please install pnpm ^(https://pnpm.io/installation^) and try again.
+    pause
+    exit /b 1
+  )
+  call pnpm install --frozen-lockfile --prod
+  if errorlevel 1 (
+    echo Failed to install dependencies. Please check your pnpm installation.
     pause
     exit /b 1
   )

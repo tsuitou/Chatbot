@@ -312,11 +312,6 @@ export function createAttachmentBucket(options = {}) {
     for (const file of files) {
       try {
         const normalized = await normalizeFile(file)
-        if (!isMimeAllowed(normalized, policy)) {
-          throw new Error(
-            `File type not allowed for this model: ${normalized.type || normalized.name}`
-          )
-        }
         validateFile(normalized)
         if (maxFileSize && normalized.size > maxFileSize) {
           showErrorToast(

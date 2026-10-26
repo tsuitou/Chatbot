@@ -93,7 +93,9 @@
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
 import * as db from '../services/db'
+import { useChatStore } from '../stores/chat'
 
+const chatStore = useChatStore()
 const PAGE_SIZE = 50
 
 const storageEstimate = ref({ usage: null, quota: null })
@@ -231,11 +233,22 @@ async function getStorageEstimate() {
   }
 }
 
+// Records removed here bypass the chat store, so reload what it caches.
+const syncChatStore = async () => {
+  chatStore.setModelSettings(await db.getModelSettings())
+  await chatStore.refreshChatList()
+  const activeId = chatStore.activeChat?.id
+  if (activeId && !chatStore.chatList.some((chat) => chat.id === activeId)) {
+    await chatStore.prepareNewChat()
+  }
+}
+
 const clearIndexedDb = async () => {
   if (!confirm('Are you sure you want to delete all IndexedDB data?')) {
     return
   }
   await db.clearStore()
+  await syncChatStore()
   await refreshRecordCounts()
   currentPage.value = 1
   await loadIndexedDbPage()
@@ -243,6 +256,7 @@ const clearIndexedDb = async () => {
 
 const deleteDbRecord = async (id) => {
   await db.deleteRecordById(id)
+  await syncChatStore()
   await refreshRecordCounts()
   const totalForFilter = getCountForFilter(recordCounts.value, dbFilter.value)
   const maxPage = Math.max(1, Math.ceil(totalForFilter / PAGE_SIZE))

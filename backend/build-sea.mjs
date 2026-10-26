@@ -49,7 +49,7 @@ async function main() {
   // 4. Inject SEA blob
   const postjectPath = path.join(__dirname, 'node_modules', '.bin', 'postject')
   if (!fs.existsSync(postjectPath)) {
-    throw new Error('postject binary not found. Run npm install first.')
+    throw new Error('postject binary not found. Run pnpm install first.')
   }
 
   const seaBlob = path.join(__dirname, 'server.sea')

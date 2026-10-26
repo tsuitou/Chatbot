@@ -34,7 +34,7 @@ async function main() {
   console.log(`Creating release v${version}...`)
 
   try {
-    const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+    const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
     const releaseName = `chatbot_v${version}`
     const zipName = `${releaseName}.zip`
     const releaseDir = path.join(__dirname, 'releases')
@@ -46,7 +46,7 @@ async function main() {
     for (const [key, value] of Object.entries(frontendBuildEnv)) {
       console.log(`Frontend build env: ${key}=${value}`)
     }
-    execFileSync(npmCommand, ['run', 'build'], {
+    execFileSync(pnpmCommand, ['run', 'build'], {
       cwd: path.join(__dirname, 'frontend'),
       stdio: 'inherit',
       env: {

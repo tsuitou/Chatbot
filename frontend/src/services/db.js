@@ -540,12 +540,18 @@ export async function saveChatSettings(chatId, settings = null) {
   await tx.done
 }
 
-export async function updateChatMetadata(chatId, patch = {}) {
+export async function updateChatMetadata(
+  chatId,
+  patch = {},
+  { touch = true } = {}
+) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readwrite')
   const store = tx.store
   const chat = await ensureChat(store, chatId)
-  const updated = { ...chat, ...patch, lastModified: now() }
+  const updated = touch
+    ? { ...chat, ...patch, lastModified: now() }
+    : { ...chat, ...patch }
   await store.put(updated)
   await tx.done
   return updated
@@ -737,7 +743,11 @@ export async function saveMessage(chatId, message) {
   return record.id
 }
 
-export async function updateMessage(chatId, message) {
+export async function updateMessage(
+  chatId,
+  message,
+  { touchChat = true } = {}
+) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readwrite')
   const store = tx.store
@@ -763,7 +773,9 @@ export async function updateMessage(chatId, message) {
       next.sender
     )
   }
-  await store.put({ ...chat, lastModified: now() })
+  if (touchChat) {
+    await store.put({ ...chat, lastModified: now() })
+  }
   await tx.done
 }
 

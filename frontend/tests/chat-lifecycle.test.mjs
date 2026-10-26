@@ -13,7 +13,7 @@ const source = (
   .replace('export const useChatStore', 'const useChatStore')
   .replaceAll('import.meta.env.DEV', 'false')
 
-function setup(db = {}) {
+function setup(db = {}, globals = {}) {
   const events = []
   const config = {
     persistSettings: async () => events.push('settings'),
@@ -29,6 +29,7 @@ function setup(db = {}) {
     showErrorToast: () => events.push('error'),
     console: { error() {}, warn() {} },
     ensureContentRuntime: (message) => (message.runtime ||= {}),
+    ...globals,
   })
   const store = {
     chatState: {
@@ -52,6 +53,9 @@ function setup(db = {}) {
   return { store, events }
 }
 
+// Values built inside the vm context carry its prototypes.
+const plain = (value) => JSON.parse(JSON.stringify(value))
+
 function deferred() {
   let resolve
   const promise = new Promise((done) => {
@@ -73,6 +77,66 @@ test('settings save synchronizes title and persisted modification time', async (
   assert.equal(store.chatState.active.meta.title, 'Renamed')
   assert.equal(store.chatState.list[0].lastModified, 123)
   assert.deepEqual(events, ['settings', 'auto'])
+})
+
+test('inline title save trims and moves the chat with its persisted time', async () => {
+  const calls = []
+  const { store } = setup({
+    updateChatMetadata: async (id, patch, options) => {
+      calls.push(plain({ id, patch, options }))
+      return { id, title: 'Old', ...patch, lastModified: 456, settings: {} }
+    },
+  })
+  await store.updateTitle('  Renamed  ')
+  assert.deepEqual(calls, [{ id: 'a', patch: { title: 'Renamed' } }])
+  assert.equal(store.chatState.list[0].title, 'Renamed')
+  assert.equal(store.chatState.list[0].lastModified, 456)
+  assert.equal(store.chatState.active.meta.title, 'Renamed')
+  assert.equal(store.chatState.active.meta.lastModified, 456)
+  assert.equal('settings' in store.chatState.active.meta, false)
+})
+
+test('bookmarking keeps the chat position in history', async () => {
+  const calls = []
+  const { store } = setup({
+    updateChatMetadata: async (id, patch, options) => {
+      calls.push(plain({ id, patch, options }))
+    },
+  })
+  store.chatState.list[1].lastModified = 1
+  await store.toggleBookmark('b')
+  assert.deepEqual(calls, [
+    { id: 'b', patch: { isBookmarked: true }, options: { touch: false } },
+  ])
+  assert.equal(store.chatState.list[1].isBookmarked, true)
+  assert.equal(store.chatState.list[1].lastModified, 1)
+})
+
+test('a failed generation still refreshes the chat list position', async () => {
+  const { store } = setup()
+  store.chatState.active.messages = [{ id: 'm', requestId: 'r' }]
+  store.generationState = {
+    status: 'streaming',
+    stream: { chatId: 'a', requestId: 'r' },
+  }
+  store._persistActiveMessage = async () => true
+  await store.handleStreamError({ chatId: 'a', requestId: 'r', error: 'x' })
+  assert.equal(store.generationState.status, 'error')
+  assert.equal(typeof store.chatState.list[0].lastModified, 'number')
+})
+
+test('display-only flags persist without touching the chat', async () => {
+  const persisted = []
+  const { store } = setup()
+  store.chatState.active.messages = [{ id: 'm' }]
+  store._persistActiveMessage = async (message, options) => {
+    persisted.push(plain({ flags: message.uiFlags, options }))
+  }
+  store.updateMessageUiFlags('m', { thoughtsCollapsed: false })
+  assert.deepEqual(persisted, [
+    { flags: { thoughtsCollapsed: false }, options: { touchChat: false } },
+  ])
+  assert.equal(store.chatState.list[0].lastModified, undefined)
 })
 
 test('deletion cancels generation before deleting and waits for navigation', async () => {
@@ -164,4 +228,44 @@ test('late events after deletion do not modify a new chat', async () => {
   await store.handleStreamError(oldEvent)
   assert.equal(store.generationState.stream.requestId, 'next')
   assert.deepEqual(events, [])
+})
+
+test('unsupported attachments stay in history but are left out of the request', async () => {
+  const sent = []
+  const { store, events } = setup(
+    { deleteMessages: async () => {} },
+    {
+      apiAdapter: {
+        createApiRequest: async ({ messages }) => {
+          sent.push(plain(messages))
+          return {}
+        },
+      },
+      showWarningToast: (message) => events.push(message),
+    }
+  )
+  const video = { id: 'v', mimeType: 'video/mp4' }
+  const image = { id: 'i', mimeType: 'image/png' }
+  const history = [
+    { id: 'u', sender: 'user', attachments: [video, image] },
+    { id: 'p', sender: 'user', attachments: [image] },
+  ]
+  store.uiSignals = { scrollToken: 0 }
+  store.composerState = {
+    attachmentBucket: { isUnsupported: (att) => att.mimeType === 'video/mp4' },
+  }
+  await store._executeGeneration({
+    chatId: 'a',
+    requestMessages: history,
+    modelMessage: { id: 'm', requestId: 'r' },
+    requestConfig: { model: 'claude' },
+  })
+  assert.deepEqual(
+    sent[0].map((message) => message.attachments.map((att) => att.id)),
+    [['i'], ['i']]
+  )
+  assert.equal(history[0].attachments.length, 2)
+  assert.deepEqual(events, [
+    '1 attachment(s) not sent: unsupported by the current model.',
+  ])
 })

@@ -22,7 +22,7 @@ This is a chatbot frontend for Gemini. I created it to have the features I wante
 
 ## Environment
 - Node.js
-- npm
+- pnpm (v11+)
 
 ## Setup Instructions
 1. Unzip the latest zip file (`chatbot_v*.zip`) from the Releases page and navigate to the extracted directory.
@@ -47,7 +47,7 @@ Run the following command in your terminal:
 ### Manual Launch
 1. Install the required packages (only for the first time).
    ```bash
-   npm i
+   pnpm install --frozen-lockfile --prod
    ```
 2. Start the server within the extracted directory.
    ```bash
@@ -130,7 +130,7 @@ Gemini向けのチャットボットフロントエンドです。自分が欲�
 
 ## 環境
 - Node.js
-- npm
+- pnpm（v11以降）
 
 ## セットアップ手順
 1. Releaseにある最新のzipファイル（`chatbot_v*.zip`）を解凍し、展開されたディレクトリに移動します。
@@ -155,7 +155,7 @@ Gemini向けのチャットボットフロントエンドです。自分が欲�
 ### 手動起動
 1. 依存パッケージをインストールします（初回のみ）。
    ```bash
-   npm i
+   pnpm install --frozen-lockfile --prod
    ```
 2. 展開されたディレクトリ内でサーバーを起動します。
    ```bash

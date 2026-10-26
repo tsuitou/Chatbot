@@ -30,6 +30,7 @@ backend/key_valid
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # IDE / Editor specific
 .vscode

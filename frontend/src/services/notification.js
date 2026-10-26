@@ -25,6 +25,14 @@ export function showErrorToast(error) {
 }
 
 /**
+ * Shows a warning toast notification.
+ * @param {string} message - The message to display.
+ */
+export function showWarningToast(message) {
+  toast.warning(message)
+}
+
+/**
  * Shows a success toast notification.
  * @param {string} message - The message to display.
  */
