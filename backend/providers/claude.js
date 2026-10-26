@@ -332,9 +332,20 @@ export class ClaudeProvider {
         continue
       }
       if (!['user', 'model'].includes(message.role)) continue
+      const isAssistant = message.role === 'model'
       const content = (message.parts || [])
         .map((part) => this._buildContentBlock(part))
         .filter(Boolean)
+        // API 2026-10-21 rejects document blocks in assistant messages:
+        // inline text documents and drop PDFs there.
+        .flatMap((block) => {
+          if (!isAssistant || block.type !== 'document') return [block]
+          if (block.source.type === 'text') {
+            return [{ type: 'text', text: block.source.data }]
+          }
+          console.warn('Dropped a PDF attachment from an assistant message.')
+          return []
+        })
       result.push({
         role: message.role === 'model' ? 'assistant' : 'user',
         content: content.length ? content : [{ type: 'text', text: '' }],
