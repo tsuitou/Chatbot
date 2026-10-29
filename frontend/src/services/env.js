@@ -42,3 +42,14 @@ export const MAX_UPLOAD_FILE_SIZE = parseByteSize(
   import.meta.env.VITE_MAX_UPLOAD_FILE_SIZE,
   10 * 1024 * 1024
 )
+
+const parsePositiveSeconds = (value, fallback) => {
+  if (typeof value !== 'string' || !value.trim()) return fallback
+  const seconds = Number(value.trim())
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : fallback
+}
+
+// How long a streaming response may stay silent before it is treated as
+// stalled. Only applied to streaming requests on regular providers.
+export const STREAM_IDLE_TIMEOUT_MS =
+  parsePositiveSeconds(import.meta.env.VITE_STREAM_IDLE_TIMEOUT, 180) * 1000

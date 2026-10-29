@@ -10,6 +10,11 @@
       <span>Drop files here</span>
     </div>
 
+    <div v-if="connectionNotice" class="connection-notice" role="status">
+      <font-awesome-icon icon="spinner" spin />
+      <span>{{ connectionNotice }}</span>
+    </div>
+
     <div class="input-area">
       <!-- Attachment Previews -->
       <div v-if="attachments.length > 0" class="attachment-previews">
@@ -113,8 +118,8 @@
         </button>
         <button
           class="send-button"
-          :title="isSending ? 'Stop' : 'Send'"
-          :disabled="isUploadingFiles"
+          :title="sendButtonTitle"
+          :disabled="isSendDisabled"
           :class="{ 'is-sending': isSending }"
           @click="handleSend"
         >
@@ -156,9 +161,28 @@ const supportsAttachments = computed(
   () => store.currentModelCapabilities.attachments?.enabled === true
 )
 const isSending = computed(() => store.isGenerating)
+const connectionNotice = computed(() => {
+  switch (store.connectionStatus) {
+    case 'connecting':
+      return 'Connecting to the server…'
+    case 'disconnected':
+      return 'Disconnected from the server. Reconnecting…'
+    default:
+      return ''
+  }
+})
 const isDragging = computed(() => dragCounter.value > 0)
 const isUploadingFiles = computed(() => {
   return attachments.value.some((file) => file.uploadProgress < 100)
+})
+// Stopping must stay possible; only starting a request needs the server.
+const isSendDisabled = computed(
+  () => !isSending.value && (isUploadingFiles.value || !store.isConnected)
+)
+const sendButtonTitle = computed(() => {
+  if (isSending.value) return 'Stop'
+  if (!store.isConnected) return 'Send (not connected to the server)'
+  return 'Send'
 })
 
 const isExpired = (file) => {
@@ -248,6 +272,7 @@ const toggleTool = (toolName) => {
 }
 
 const handleSend = () => {
+  if (isSendDisabled.value) return
   if (isSending.value) {
     store.cancelGeneration()
   } else {
@@ -425,6 +450,29 @@ onUnmounted(() => {
   font-weight: bold;
   color: var(--primary-color);
   z-index: 10;
+}
+
+.connection-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 12px;
+  border-radius: var(--border-radius);
+  background-color: var(--bg-gray);
+  color: var(--text-light);
+  font-size: 13px;
+  /* Delay so the brief "connecting" state on page load does not flash. */
+  animation: connection-notice-in 0.2s ease 0.8s both;
+}
+
+@keyframes connection-notice-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .input-area {

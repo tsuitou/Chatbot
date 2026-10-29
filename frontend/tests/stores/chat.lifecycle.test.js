@@ -151,7 +151,9 @@ describe('chat metadata', () => {
 describe('generation lifecycle', () => {
   it('a failed generation still refreshes the chat list position', async () => {
     const store = setup()
-    store.chatState.active.messages = [{ id: 'm', requestId: 'r' }]
+    store.chatState.active.messages = [
+      { id: 'm', requestId: 'r', status: 'streaming' },
+    ]
     store.generationState = {
       status: 'streaming',
       stream: { chatId: 'a', requestId: 'r' },
@@ -166,7 +168,13 @@ describe('generation lifecycle', () => {
     const saving = deferred()
     const store = setup()
     store.chatState.active.messages = [
-      { id: 'm', requestId: 'r', createdAt: 0, content: { text: 'done' } },
+      {
+        id: 'm',
+        requestId: 'r',
+        status: 'streaming',
+        createdAt: 0,
+        content: { text: 'done' },
+      },
     ]
     store.generationState = {
       status: 'streaming',

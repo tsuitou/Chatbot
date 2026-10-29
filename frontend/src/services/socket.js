@@ -32,20 +32,43 @@ let handlers = {
   onChunk: () => {},
   onEnd: () => {},
   onError: () => {},
+  onDisconnect: () => {},
+  onConnectionChange: () => {},
 }
 
-export const registerSocketHandlers = ({ onChunk, onEnd, onError }) => {
+export const registerSocketHandlers = ({
+  onChunk,
+  onEnd,
+  onError,
+  onDisconnect,
+  onConnectionChange,
+}) => {
   if (onChunk) handlers.onChunk = onChunk
   if (onEnd) handlers.onEnd = onEnd
   if (onError) handlers.onError = onError
+  if (onDisconnect) handlers.onDisconnect = onDisconnect
+  if (onConnectionChange) handlers.onConnectionChange = onConnectionChange
 }
 
 socket.on('connect', () => {
   console.log('Socket connected:', socket.id)
+  handlers.onConnectionChange('connected')
 })
 
-socket.on('disconnect', () => {
-  console.log('Socket disconnected')
+socket.on('disconnect', (reason) => {
+  console.log('Socket disconnected:', reason)
+  handlers.onConnectionChange('disconnected')
+  // The backend aborts any running generation when the socket drops, so the
+  // in-flight request can never finish; let the store close it out.
+  handlers.onDisconnect(reason)
+  // socket.io does not retry after a server-initiated disconnect.
+  if (reason === 'io server disconnect') {
+    socket.connect()
+  }
+})
+
+socket.io.on('reconnect_attempt', () => {
+  handlers.onConnectionChange('connecting')
 })
 
 socket.on('chunk', async (rawChunk, ack) => {
@@ -84,6 +107,7 @@ socket.on('frontend_reload', (payload) => {
 
 export const connectSocket = () => {
   if (!socket.connected) {
+    handlers.onConnectionChange('connecting')
     socket.connect()
   }
 }

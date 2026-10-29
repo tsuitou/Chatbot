@@ -10,6 +10,7 @@ import {
   cancelBackendGeneration,
 } from '../services/socket'
 import { showErrorToast, showWarningToast } from '../services/notification'
+import { STREAM_IDLE_TIMEOUT_MS } from '../services/env'
 import { exportChatAsHTML } from '../services/htmlExporter'
 import {
   normalizeSettingsEntry,
@@ -47,6 +48,27 @@ const GenerationStatus = Object.freeze({
   STREAMING: 'streaming',
   ERROR: 'error',
 })
+
+const ConnectionStatus = Object.freeze({
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+})
+
+const CONNECTION_LOST_MESSAGE =
+  'Connection to the server was lost. The response is incomplete.'
+const NOT_CONNECTED_MESSAGE =
+  'Not connected to the server. Please wait for it to reconnect.'
+
+// Not reactive state: a timer handle has no business in devtools or the UI.
+let streamWatchdog = null
+
+function clearStreamWatchdog() {
+  if (streamWatchdog) {
+    clearTimeout(streamWatchdog)
+    streamWatchdog = null
+  }
+}
 
 function recordDebugRequest(payload) {
   if (!import.meta.env.DEV) return
@@ -170,6 +192,9 @@ export const useChatStore = defineStore('chat', {
       stream: null,
       lastError: null,
     },
+    connectionState: {
+      status: ConnectionStatus.CONNECTING,
+    },
     composerState: {
       prompt: '',
       model: null,
@@ -212,6 +237,10 @@ export const useChatStore = defineStore('chat', {
     isGenerating(state) {
       return state.generationState.status === GenerationStatus.STREAMING
     },
+    isConnected(state) {
+      return state.connectionState.status === ConnectionStatus.CONNECTED
+    },
+    connectionStatus: (state) => state.connectionState.status,
     currentModelCapabilities(state) {
       const model = state.composerState.model
       if (!model) return EMPTY_CAPABILITIES
@@ -404,6 +433,8 @@ export const useChatStore = defineStore('chat', {
         onChunk: (chunk) => this.handleStreamChunk(chunk),
         onEnd: (result) => this.handleStreamEnd(result),
         onError: (error) => this.handleStreamError(error),
+        onDisconnect: () => this.handleDisconnect(),
+        onConnectionChange: (status) => this.setConnectionStatus(status),
       })
       this.composerState.attachmentBucket = this._createAttachmentBucket()
       try {
@@ -681,6 +712,7 @@ export const useChatStore = defineStore('chat', {
     },
 
     _setGenerationState(status, stream = null, error = null) {
+      clearStreamWatchdog()
       this.generationState = {
         status,
         stream,
@@ -695,7 +727,9 @@ export const useChatStore = defineStore('chat', {
       if (!stream || stream.requestId !== rawChunk.requestId) return false
 
       const message = this._findMessageByRequestId(stream.requestId)
-      if (!message) return false
+      if (!message || message.status !== 'streaming') return false
+
+      this._armStreamWatchdog()
 
       const parsed = apiAdapter.parseApiResponse(rawChunk) || {}
 
@@ -790,7 +824,8 @@ export const useChatStore = defineStore('chat', {
       const stream = this.generationState.stream
       if (!stream || stream.requestId !== result.requestId) return
       const message = this._findMessageByRequestId(result.requestId)
-      if (!message) return
+      // Already finalized (e.g. by a disconnect or stall) — ignore late events.
+      if (!message || message.status !== 'streaming') return
 
       if (result.aborted) {
         message.status = 'cancelled'
@@ -858,7 +893,7 @@ export const useChatStore = defineStore('chat', {
       const stream = this.generationState.stream
       if (!stream || stream.requestId !== rawError.requestId) return
       const message = this._findMessageByRequestId(rawError.requestId)
-      if (!message) return
+      if (!message || message.status !== 'streaming') return
 
       message.status = 'completed'
       message.metadata = {
@@ -884,6 +919,51 @@ export const useChatStore = defineStore('chat', {
       showErrorToast(
         rawError?.error || rawError?.message || 'An unexpected error occurred.'
       )
+    },
+
+    setConnectionStatus(status) {
+      if (Object.values(ConnectionStatus).includes(status)) {
+        this.connectionState.status = status
+      }
+    },
+
+    // Partial output is kept (marked as an error) rather than dropped as on a
+    // user cancel: losing the connection is not something the user chose.
+    async handleDisconnect() {
+      const stream = this.generationState.stream
+      if (!this.isGenerating || !stream) return
+      await this.handleStreamError({
+        chatId: stream.chatId,
+        requestId: stream.requestId,
+        error: CONNECTION_LOST_MESSAGE,
+      })
+    },
+
+    _armStreamWatchdog() {
+      clearStreamWatchdog()
+      const stream = this.generationState.stream
+      if (!this.isGenerating || !stream?.watchIdle) return
+      const { requestId } = stream
+      streamWatchdog = setTimeout(() => {
+        streamWatchdog = null
+        void this._handleStreamStall(requestId)
+      }, STREAM_IDLE_TIMEOUT_MS)
+    },
+
+    async _handleStreamStall(requestId) {
+      const stream = this.generationState.stream
+      if (!this.isGenerating || stream?.requestId !== requestId) return
+      const { chatId } = stream
+      const seconds = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)
+      // Finalize first so the backend's "aborted" reply to the cancel below
+      // finds the message already settled and is ignored.
+      const finishing = this.handleStreamError({
+        chatId,
+        requestId,
+        error: `No response from the server for ${seconds} seconds. Generation was stopped.`,
+      })
+      cancelBackendGeneration({ chatId, requestId })
+      await finishing
     },
 
     async cancelGeneration() {
@@ -1208,6 +1288,11 @@ export const useChatStore = defineStore('chat', {
         messageId: modelMessage.id,
         requestId,
         providerId: requestConfig.providerId,
+        // Non-streaming replies and agent models legitimately stay silent for
+        // a long time, so only watch regular streaming requests for stalls.
+        watchIdle:
+          requestConfig.streaming !== false &&
+          requestConfig.providerId !== 'virtual',
       })
       this._touchActiveChat()
       this.bumpScrollSignal()
@@ -1253,6 +1338,7 @@ export const useChatStore = defineStore('chat', {
 
         recordDebugRequest(payload)
         startGeneration(payload)
+        this._armStreamWatchdog()
       } catch (error) {
         if (this.generationState.stream?.requestId !== requestId) return
         console.error('Failed to start generation:', error)
@@ -1267,6 +1353,10 @@ export const useChatStore = defineStore('chat', {
     async sendMessage() {
       if (this.chatState.deletingIds.includes(this.chatState.active?.meta?.id))
         return
+      if (!this.isConnected) {
+        showErrorToast(NOT_CONNECTED_MESSAGE)
+        return
+      }
       const prompt = this.composerState.prompt || ''
       let requestConfig = this.currentRequestConfig
 
@@ -1377,6 +1467,11 @@ export const useChatStore = defineStore('chat', {
 
     async resendMessage(messageId) {
       if (!this.chatState.active) return
+      // Resending prunes later messages first, so refuse before touching them.
+      if (!this.isConnected) {
+        showErrorToast(NOT_CONNECTED_MESSAGE)
+        return
+      }
 
       if (this.isGenerating) {
         await this.cancelGeneration()
