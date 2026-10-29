@@ -9,7 +9,7 @@ import DebugPanel from './components/DebugPanel.vue'
 import { useSessionStore } from './stores/session'
 import { useModelsStore } from './stores/models'
 import { useComposerStore } from './stores/composer'
-import { useChatConfigStore } from './stores/chatConfig'
+import { useChatsStore } from './stores/chats'
 import { getModels, getDefaultModel } from './services/api'
 import { connectSocket } from './services/socket'
 import { showErrorToast } from './services/notification'
@@ -18,7 +18,7 @@ import { DEBUG_PANEL_ENABLED } from './services/env'
 const session = useSessionStore()
 const models = useModelsStore()
 const composer = useComposerStore()
-const chatConfigStore = useChatConfigStore()
+const chats = useChatsStore()
 
 const isSettingsModalOpen = ref(false)
 const isDataModalOpen = ref(false)
@@ -58,9 +58,9 @@ onMounted(async () => {
     models.setDefaultModel(defaultModel)
     composer.applyDefaultModel(models.defaultModel, defaultProviderId)
     await composer.selectModel(defaultModel, defaultProviderId)
-    chatConfigStore.prepareForNewChat({
-      systemPrompt: session.buildRequestConfig().systemInstruction || '',
-    })
+    // Same starting state as "New Chat", including the model's default
+    // system prompt.
+    chats.closeChat()
   } catch (error) {
     console.error('Failed to initialize app state:', error)
     showErrorToast(
