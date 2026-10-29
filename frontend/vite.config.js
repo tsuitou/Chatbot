@@ -5,4 +5,9 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   base: '/chatbot/',
   plugins: [vue()],
+  test: {
+    environment: 'node',
+    include: ['tests/**/*.test.js'],
+    restoreMocks: true,
+  },
 })

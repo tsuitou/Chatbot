@@ -18,6 +18,12 @@ export default [
       'vue/multi-word-component-names': 'off',
     },
   },
+  {
+    files: ['tests/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
   // Prettier 併用時は最後に
   eslintConfigPrettier,
   prettierRecommended,
