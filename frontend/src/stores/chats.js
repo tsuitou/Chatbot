@@ -401,7 +401,7 @@ export const useChatsStore = defineStore('chats', {
       const composer = useComposerStore()
       await useModelsStore().ensureModelCapabilities(
         composer.model,
-        composer.providerId
+        composer.effectiveProviderId
       )
       this.editing.attachmentBucket.dropUnsupportedForCurrentPolicy?.()
       const attachmentIssue = this.editing.attachmentBucket.getBlockingIssue?.()

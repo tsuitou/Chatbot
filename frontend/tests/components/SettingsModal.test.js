@@ -57,7 +57,11 @@ const { db, store, composer } = vi.hoisted(() => {
       store.applied = value
     },
   }
-  const composer = { model: 'gemini-2.5-flash', providerId: 'gemini' }
+  const composer = {
+    model: 'gemini-2.5-flash',
+    providerId: 'gemini',
+    effectiveProviderId: 'gemini',
+  }
   return { db, store, composer }
 })
 

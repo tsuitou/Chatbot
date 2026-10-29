@@ -413,7 +413,7 @@ onMounted(async () => {
   const modelToShow = composer.model || firstGroup?.models?.[0] || ''
   selectedModel.value = modelToShow
   selectedProviderId.value = composer.model
-    ? composer.providerId
+    ? composer.effectiveProviderId
     : firstGroup?.provider || null
   loadSettingsForModel(modelToShow)
   fetchCapabilitiesForModel(modelToShow)

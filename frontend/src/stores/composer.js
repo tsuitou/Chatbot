@@ -26,8 +26,20 @@ export const useComposerStore = defineStore('composer', {
   }),
 
   getters: {
+    // The composer may not know the provider (e.g. a plain model list) while
+    // the model's saved settings do. Every lookup and request uses this one.
+    effectiveProviderId(state) {
+      return (
+        state.providerId ||
+        useModelsStore().settingsFor(state.model).providerId ||
+        null
+      )
+    },
     capabilities(state) {
-      return useModelsStore().capabilitiesFor(state.model, state.providerId)
+      return useModelsStore().capabilitiesFor(
+        state.model,
+        this.effectiveProviderId
+      )
     },
     toolDefinitions() {
       return this.capabilities.tools || {}
@@ -41,7 +53,7 @@ export const useComposerStore = defineStore('composer', {
           ? {}
           : enabledTools(state.tools, this.toolDefinitions)
       return {
-        providerId: state.providerId || settings.providerId,
+        providerId: this.effectiveProviderId,
         model: state.model,
         tools,
         attachments: this.capabilities.attachments || {},
@@ -119,7 +131,10 @@ export const useComposerStore = defineStore('composer', {
 
     async selectModel(model, providerId = null) {
       this.setActiveModel(model, providerId)
-      await useModelsStore().ensureModelCapabilities(model, providerId)
+      await useModelsStore().ensureModelCapabilities(
+        model,
+        this.effectiveProviderId
+      )
       this.pruneToolsForCurrentModel()
       this.attachmentBucket.dropUnsupportedForCurrentPolicy?.()
     },
