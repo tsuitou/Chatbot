@@ -141,7 +141,7 @@ import { useChatsStore } from '../stores/chats'
 import { useComposerStore } from '../stores/composer'
 import { useModelsStore } from '../stores/models'
 import { useSessionStore } from '../stores/session'
-const emit = defineEmits(['open-settings', 'open-data-modal'])
+const emit = defineEmits(['open-settings', 'open-data-modal', 'navigate'])
 const chats = useChatsStore()
 const composer = useComposerStore()
 const models = useModelsStore()
@@ -202,8 +202,14 @@ const onModelChange = async (event) => {
   const providerId = event.target.selectedOptions?.[0]?.dataset?.providerId
   await composer.selectModel(model, providerId || null)
 }
-const prepareNewChat = () => session.newChat()
-const loadChat = (chatId) => session.openChat(chatId)
+const prepareNewChat = () => {
+  emit('navigate')
+  return session.newChat()
+}
+const loadChat = (chatId) => {
+  emit('navigate')
+  return session.openChat(chatId)
+}
 const deleteChat = (chatId) => {
   if (confirm('Are you sure you want to delete this chat?')) {
     session.deleteChat(chatId)
@@ -219,6 +225,21 @@ const deleteChat = (chatId) => {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+}
+
+/* Narrow screens: an off-canvas drawer, opened from the chat header. */
+.side-panel.is-drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  width: min(var(--sidebar-width), 85vw);
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+}
+
+.side-panel.is-drawer.is-open {
+  transform: none;
+  box-shadow: var(--shadow-lg);
 }
 
 .side-panel-content {
@@ -433,8 +454,16 @@ input:checked + .toggle-slider:before {
   transition: var(--transition);
 }
 
-.history-item:hover .sidebar-actions {
+.history-item:hover .sidebar-actions,
+.history-item:focus-within .sidebar-actions,
+.history-item.active .sidebar-actions {
   display: flex;
+}
+
+@media (hover: none) {
+  .sidebar-actions {
+    display: flex;
+  }
 }
 
 .sidebar-action-btn:hover {

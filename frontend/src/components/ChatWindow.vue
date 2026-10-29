@@ -1,6 +1,17 @@
 <template>
   <main class="chat-window">
     <div class="chat-header">
+      <button
+        v-if="showMenuButton"
+        class="action-button menu-button"
+        type="button"
+        title="Chats"
+        aria-label="Open chat list"
+        data-testid="sidebar-toggle"
+        @click="emit('open-sidebar')"
+      >
+        <font-awesome-icon icon="bars" />
+      </button>
       <h2
         class="chat-title"
         :class="{ editing: isEditingTitle, disabled: !isChatOpen }"
@@ -135,6 +146,11 @@ import { showErrorToast, showSuccessToast } from '../services/notification'
 import Message from './Message.vue'
 import PreviewPanel from './PreviewPanel.vue'
 import ChatSettingsModal from './ChatSettingsModal.vue'
+defineProps({
+  showMenuButton: { type: Boolean, default: false },
+})
+const emit = defineEmits(['open-sidebar'])
+
 const chatStore = useChatsStore()
 const session = useSessionStore()
 const displayStore = useDisplayStore()
@@ -368,6 +384,7 @@ const handleResend = (messageId) => {
   gap: 8px;
   cursor: pointer;
   flex-grow: 1;
+  min-width: 0;
   color: var(--text-color);
 }
 
@@ -479,5 +496,28 @@ const handleResend = (messageId) => {
 
 .welcome-view p {
   font-size: 16px;
+}
+
+.menu-button {
+  margin-right: 12px;
+}
+
+@media (max-width: 767px) {
+  .chat-header {
+    padding: 10px 12px;
+  }
+
+  .chat-actions {
+    gap: 4px;
+  }
+
+  .action-button {
+    padding: 6px;
+  }
+
+  .message-list {
+    padding: 12px;
+    gap: 16px;
+  }
 }
 </style>

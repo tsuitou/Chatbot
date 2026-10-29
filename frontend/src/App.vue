@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import SidePanel from './components/SidePanel.vue'
 import ChatWindow from './components/ChatWindow.vue'
 import InputArea from './components/InputArea.vue'
@@ -14,6 +14,7 @@ import { getModels, getDefaultModel } from './services/api'
 import { connectSocket } from './services/socket'
 import { showErrorToast } from './services/notification'
 import { DEBUG_PANEL_ENABLED } from './services/env'
+import { useMediaQuery } from './composables/useMediaQuery'
 
 const session = useSessionStore()
 const models = useModelsStore()
@@ -23,6 +24,18 @@ const chats = useChatsStore()
 const isSettingsModalOpen = ref(false)
 const isDataModalOpen = ref(false)
 const isDebugPanelEnabled = DEBUG_PANEL_ENABLED
+
+// Below this width the side panel becomes a drawer over the chat.
+const isNarrow = useMediaQuery('(max-width: 767px)')
+const isSidebarOpen = ref(false)
+const openSidebar = () => (isSidebarOpen.value = true)
+const closeSidebar = () => (isSidebarOpen.value = false)
+watch(isNarrow, closeSidebar)
+const handleKeydown = (event) => {
+  if (event.key === 'Escape' && isNarrow.value && isSidebarOpen.value) {
+    closeSidebar()
+  }
+}
 
 const handleBeforeUnload = () => {
   if (session.isGenerating) {
@@ -34,6 +47,7 @@ const handleBeforeUnload = () => {
 
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
+  window.addEventListener('keydown', handleKeydown)
   connectSocket()
   try {
     await session.initialize()
@@ -71,6 +85,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('keydown', handleKeydown)
 })
 
 const openSettingsModal = () => (isSettingsModalOpen.value = true)
@@ -82,11 +97,19 @@ const closeDataModal = () => (isDataModalOpen.value = false)
 <template>
   <div id="app-container">
     <SidePanel
+      :class="{ 'is-drawer': isNarrow, 'is-open': isSidebarOpen }"
+      :inert="isNarrow && !isSidebarOpen"
       @open-settings="openSettingsModal"
       @open-data-modal="openDataModal"
+      @navigate="closeSidebar"
     />
+    <div
+      v-if="isNarrow && isSidebarOpen"
+      class="drawer-backdrop"
+      @click="closeSidebar"
+    ></div>
     <div class="main-view">
-      <ChatWindow />
+      <ChatWindow :show-menu-button="isNarrow" @open-sidebar="openSidebar" />
       <InputArea />
     </div>
     <SettingsModal v-if="isSettingsModalOpen" @close="closeSettingsModal" />
@@ -99,8 +122,16 @@ const closeDataModal = () => (isDataModalOpen.value = false)
 #app-container {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background-color: var(--bg-color);
+}
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background-color: var(--overlay-bg);
 }
 
 .main-view {

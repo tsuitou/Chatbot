@@ -1603,3 +1603,24 @@
   color: var(--color-prettylights-syntax-markup-deleted-text);
   background-color: var(--color-prettylights-syntax-markup-deleted-bg);
 }
+
+/* --- Touch, keyboard and narrow screens -------------------------------- */
+/* Actions appear on hover; keep them reachable by keyboard and on touch
+   screens, which have no hover. */
+.message-wrapper:focus-within .message-actions {
+  opacity: 1;
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .message-wrapper .message-actions {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@media (max-width: 767px) {
+  .message-bubble {
+    padding: 12px 14px;
+  }
+}

@@ -111,6 +111,16 @@ onUnmounted(() => {
   flex-direction: column;
   background-color: var(--bg-color);
 }
+
+@media (max-width: 767px) {
+  .preview-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    width: auto;
+    border-left: none;
+  }
+}
 .preview-header {
   display: flex;
   align-items: center;

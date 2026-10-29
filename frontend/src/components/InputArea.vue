@@ -429,6 +429,7 @@ onUnmounted(() => {
 <style scoped>
 .input-area-wrapper {
   padding: 16px 24px 24px;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
   background-color: var(--bg-color);
   flex-shrink: 0;
   border-top: 1px solid var(--border-color);
@@ -665,5 +666,12 @@ onUnmounted(() => {
 .preview-card.unsupported .preview-details {
   opacity: 0.5;
   filter: grayscale(80%);
+}
+
+@media (max-width: 767px) {
+  .input-area-wrapper {
+    padding: 8px 12px 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 </style>
