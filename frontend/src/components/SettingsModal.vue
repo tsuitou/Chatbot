@@ -5,12 +5,19 @@
     @mouseup.self="handleOverlayMouseUp"
     @mouseleave="handleOverlayMouseLeave"
   >
-    <div class="modal-content">
+    <div
+      ref="dialog"
+      class="modal-content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-modal-title"
+      tabindex="-1"
+    >
       <div class="modal-header">
-        <h2>Settings</h2>
-        <button class="close-button" @click="closeModal">
+        <h2 id="settings-modal-title">Settings</h2>
+        <IconButton class="close-button" label="Close" @click="closeModal">
           <font-awesome-icon icon="times" />
-        </button>
+        </IconButton>
       </div>
       <div class="modal-body">
         <form class="settings-form" @submit.prevent>
@@ -223,6 +230,8 @@
 </template>
 
 <script setup>
+import { useModalDialog } from '../composables/useModalDialog'
+import IconButton from './IconButton.vue'
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useModelsStore } from '../stores/models'
 import { useComposerStore } from '../stores/composer'
@@ -445,6 +454,9 @@ onBeforeUnmount(() => {
 const closeModal = () => {
   emit('close')
 }
+
+const dialog = ref(null)
+useModalDialog(dialog, closeModal)
 
 const handleOverlayMouseDown = (event) => {
   if (event.target !== event.currentTarget) return

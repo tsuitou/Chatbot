@@ -5,12 +5,19 @@
     @mouseup.self="handleOverlayMouseUp"
     @mouseleave="handleOverlayMouseLeave"
   >
-    <div class="modal-content">
+    <div
+      ref="dialog"
+      class="modal-content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="data-management-modal-title"
+      tabindex="-1"
+    >
       <div class="modal-header">
-        <h2>Data Management</h2>
-        <button class="close-button" @click="closeModal">
+        <h2 id="data-management-modal-title">Data Management</h2>
+        <IconButton class="close-button" label="Close" @click="closeModal">
           <font-awesome-icon icon="times" />
-        </button>
+        </IconButton>
       </div>
       <div class="modal-body">
         <div class="modal-section">
@@ -41,6 +48,8 @@
 </template>
 
 <script setup>
+import { useModalDialog } from '../composables/useModalDialog'
+import IconButton from './IconButton.vue'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import ImportExportPanel from './ImportExportPanel.vue'
 import StorageInspector from './StorageInspector.vue'
@@ -67,6 +76,9 @@ onBeforeUnmount(() => {
 const closeModal = () => {
   emit('close')
 }
+
+const dialog = ref(null)
+useModalDialog(dialog, closeModal)
 
 const handleOverlayMouseDown = (event) => {
   if (event.target !== event.currentTarget) return

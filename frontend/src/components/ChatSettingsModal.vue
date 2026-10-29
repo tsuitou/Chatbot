@@ -5,12 +5,24 @@
     @mouseup.self="handleOverlayMouseUp"
     @mouseleave="handleOverlayMouseLeave"
   >
-    <div class="modal-content">
+    <div
+      ref="dialog"
+      class="modal-content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="chat-settings-modal-title"
+      tabindex="-1"
+    >
       <div class="modal-header">
-        <h2>Chat Settings</h2>
-        <button class="close-button" type="button" @click="closeModal">
+        <h2 id="chat-settings-modal-title">Chat Settings</h2>
+        <IconButton
+          class="close-button"
+          type="button"
+          label="Close"
+          @click="closeModal"
+        >
           <font-awesome-icon icon="times" />
-        </button>
+        </IconButton>
       </div>
       <div class="modal-body">
         <section v-if="!hasActiveChat" class="info-banner">
@@ -92,7 +104,7 @@
                   class="auto-group"
                 >
                   <div class="auto-group-header">
-                    <h4>{{ group.title }}</h4>
+                    <h3>{{ group.title }}</h3>
                     <button
                       type="button"
                       class="text-button"
@@ -115,9 +127,15 @@
                     class="auto-message-card"
                   >
                     <div class="auto-message-header">
-                      <button
+                      <IconButton
                         type="button"
                         class="collapse-button"
+                        :label="
+                          entry.isExpanded
+                            ? 'Collapse message'
+                            : 'Expand message'
+                        "
+                        :aria-expanded="!!entry.isExpanded"
                         @click="toggleAutoMessage(entry)"
                       >
                         <font-awesome-icon
@@ -125,19 +143,19 @@
                             entry.isExpanded ? 'chevron-up' : 'chevron-down'
                           "
                         />
-                      </button>
+                      </IconButton>
                       <span class="auto-message-summary"
                         >Message {{ index + 1 }} -
                         {{ entry.role || 'user' }}</span
                       >
-                      <button
+                      <IconButton
                         type="button"
                         class="icon-button"
-                        title="Remove message"
+                        label="Remove message"
                         @click="removeAutoMessage(group.location, index)"
                       >
                         <font-awesome-icon icon="trash" />
-                      </button>
+                      </IconButton>
                     </div>
                     <div v-if="entry.isExpanded" class="auto-message-body">
                       <label
@@ -199,14 +217,14 @@
                                 formatSize(file.size)
                               }}</span>
                             </div>
-                            <button
+                            <IconButton
                               type="button"
                               class="icon-button"
-                              title="Remove attachment"
+                              label="Remove attachment"
                               @click="entry.bucket.remove(file.id)"
                             >
                               <font-awesome-icon icon="times" />
-                            </button>
+                            </IconButton>
                           </div>
                         </template>
                         <p v-else class="auto-empty-attachments">
@@ -264,6 +282,8 @@
 </template>
 
 <script setup>
+import { useModalDialog } from '../composables/useModalDialog'
+import IconButton from './IconButton.vue'
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -447,6 +467,9 @@ onBeforeUnmount(() => {
 const closeModal = () => {
   emit('close')
 }
+
+const dialog = ref(null)
+useModalDialog(dialog, closeModal)
 
 function collectAutoMessages(location) {
   return autoMessages[location].map((entry, index) => ({
@@ -745,7 +768,7 @@ const handleSave = async () => {
 .transform-status.is-invalid {
   border-color: var(--danger-border);
   background-color: var(--danger-bg);
-  color: var(--danger-dark);
+  color: var(--danger-text);
 }
 
 .transform-status.is-neutral {
@@ -763,13 +786,12 @@ const handleSave = async () => {
 .transform-status-hint {
   font-size: 12px;
   color: inherit;
-  opacity: 0.85;
 }
 
 .error-list {
   list-style: disc;
   padding-left: 20px;
-  color: var(--danger-color);
+  color: var(--danger-text);
   font-size: 13px;
 }
 
@@ -806,7 +828,7 @@ const handleSave = async () => {
   align-items: center;
 }
 
-.auto-group-header h4 {
+.auto-group-header h3 {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-color);

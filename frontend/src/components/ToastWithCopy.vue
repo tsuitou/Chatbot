@@ -1,13 +1,18 @@
 <template>
   <div class="toast-with-copy">
     <span class="toast-message">{{ message }}</span>
-    <button class="Vue-Toastification__close-button" @click="copyToClipboard">
+    <IconButton
+      class="Vue-Toastification__close-button"
+      label="Copy message"
+      @click="copyToClipboard"
+    >
       <FontAwesomeIcon :icon="copyIcon" />
-    </button>
+    </IconButton>
   </div>
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { ref } from 'vue'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 const props = defineProps({

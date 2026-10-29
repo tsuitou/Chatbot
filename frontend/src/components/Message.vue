@@ -8,30 +8,34 @@
         }}</span>
       </div>
       <div v-if="!isEditing" class="message-actions">
-        <button
-          title="Edit"
+        <IconButton
+          label="Edit"
           :disabled="actionsDisabled"
           @click="emit('edit', messageId)"
         >
           <font-awesome-icon icon="edit" />
-        </button>
-        <button
-          title="Rerun"
+        </IconButton>
+        <IconButton
+          label="Rerun"
           :disabled="actionsDisabled"
           @click="emit('resend', messageId)"
         >
           <font-awesome-icon icon="sync-alt" />
-        </button>
-        <button title="Copy" :disabled="actionsDisabled" @click="copyContent">
+        </IconButton>
+        <IconButton
+          label="Copy"
+          :disabled="actionsDisabled"
+          @click="copyContent"
+        >
           <font-awesome-icon :icon="copyIcon" />
-        </button>
-        <button
-          title="Delete"
+        </IconButton>
+        <IconButton
+          label="Delete"
           :disabled="actionsDisabled"
           @click="emit('delete', messageId)"
         >
           <font-awesome-icon icon="trash-alt" />
-        </button>
+        </IconButton>
       </div>
     </div>
 
@@ -109,6 +113,7 @@
         v-if="shouldShowContentBubble"
         class="message-bubble"
         :class="[{ 'is-streaming': isStreaming }, contentBubbleClass]"
+        :aria-busy="isStreaming || undefined"
       >
         <div v-if="errorText" class="message-alert error" role="alert">
           {{ errorText }}
@@ -179,6 +184,7 @@
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { computed, ref, onUnmounted, watch, onMounted } from 'vue'
 import { useChatsStore } from '../stores/chats'
 import { useComposerStore } from '../stores/composer'

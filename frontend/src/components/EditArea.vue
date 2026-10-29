@@ -50,18 +50,20 @@
               file.error
             }}</span>
           </div>
-          <button
+          <IconButton
             class="remove-attachment-btn"
+            :label="`Remove ${file.name}`"
             @click="removeAttachment(file.id)"
           >
             <font-awesome-icon icon="times" />
-          </button>
+          </IconButton>
         </div>
       </div>
 
       <textarea
         ref="textInput"
         v-model="text"
+        aria-label="Edit message"
         placeholder="Edit message..."
         class="text-input"
         rows="1"
@@ -87,6 +89,7 @@
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useChatsStore } from '../stores/chats'
 import { useComposerStore } from '../stores/composer'
@@ -521,7 +524,7 @@ onUnmounted(() => {
 
 .preview-error {
   font-size: 11px;
-  color: var(--danger-color);
+  color: var(--danger-text);
   font-weight: 500;
 }
 

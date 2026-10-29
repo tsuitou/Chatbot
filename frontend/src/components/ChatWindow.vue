@@ -15,34 +15,42 @@
       <h2
         class="chat-title"
         :class="{ editing: isEditingTitle, disabled: !isChatOpen }"
-        @click="startEditingTitle"
       >
-        <span v-if="!isEditingTitle" :class="{ placeholder: !isChatOpen }">
-          {{ headerTitle }}
-        </span>
+        <button
+          v-if="!isEditingTitle"
+          ref="titleButton"
+          type="button"
+          class="title-button"
+          :disabled="!isChatOpen"
+          :title="isChatOpen ? 'Rename chat' : undefined"
+          @click="startEditingTitle"
+        >
+          <span :class="{ placeholder: !isChatOpen }">{{ headerTitle }}</span>
+          <font-awesome-icon
+            v-if="isChatOpen"
+            icon="pen-to-square"
+            class="edit-icon"
+          />
+        </button>
         <input
           v-else
           ref="titleInput"
           v-model="editingTitle"
           class="title-input"
-          @blur="saveTitle"
-          @keydown.enter="saveTitle"
+          aria-label="Chat title"
+          @blur="saveTitle()"
+          @keydown.enter="saveTitle({ refocus: true })"
           @keydown.esc="cancelEditingTitle"
-        />
-        <font-awesome-icon
-          v-if="isChatOpen && !isEditingTitle"
-          icon="pen-to-square"
-          class="edit-icon"
         />
       </h2>
       <div class="chat-actions">
-        <button
+        <IconButton
           class="action-button"
           :class="{
             'bookmark-button': isChatOpen && activeChat?.isBookmarked,
             disabled: !isChatOpen,
           }"
-          :title="bookmarkTitle"
+          :label="bookmarkTitle"
           :disabled="!isChatOpen"
           @click="toggleBookmark"
         >
@@ -53,14 +61,14 @@
                 : ['far', 'bookmark']
             "
           />
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           class="action-button"
-          :title="chatSettingsTitle"
+          :label="chatSettingsTitle"
           @click="openChatSettings"
         >
           <font-awesome-icon icon="sliders" />
-        </button>
+        </IconButton>
         <button
           class="action-button"
           :class="{ disabled: isSnapshotActionDisabled }"
@@ -108,6 +116,10 @@
         </button>
       </div>
     </div>
+    <!-- Announces finished responses; streamed text itself is not read out. -->
+    <div class="visually-hidden" role="status" aria-live="polite">
+      {{ generationAnnouncement }}
+    </div>
     <div v-if="isChatOpen" class="chat-body">
       <div ref="messageList" class="message-list">
         <Message
@@ -138,6 +150,7 @@
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { ref, computed, watch, nextTick } from 'vue'
 import { useChatsStore } from '../stores/chats'
 import { useSessionStore } from '../stores/session'
@@ -157,6 +170,7 @@ const displayStore = useDisplayStore()
 
 const messageList = ref(null)
 const titleInput = ref(null)
+const titleButton = ref(null)
 const isEditingTitle = ref(false)
 const editingTitle = ref('')
 const isChatSettingsOpen = ref(false)
@@ -208,6 +222,20 @@ const zipExportTitle = computed(() =>
 )
 const chatSettingsTitle = 'Chat Settings'
 
+const generationAnnouncement = ref('')
+watch(isGenerating, (generating, wasGenerating) => {
+  if (generating) {
+    generationAnnouncement.value = ''
+    return
+  }
+  if (!wasGenerating) return
+  const last = chatStore.activeMessages.at(-1)
+  generationAnnouncement.value =
+    last?.sender === 'model' && last.metadata?.finishReason === 'error'
+      ? 'Response stopped with an error.'
+      : 'Response complete.'
+})
+
 const updateDocumentTitle = () => {
   const title =
     isChatOpen.value && activeChat.value?.title?.trim()
@@ -257,7 +285,11 @@ const startEditingTitle = () => {
   })
 }
 
-const saveTitle = () => {
+// Keyboard confirm/cancel puts focus back on the title; a blur caused by
+// clicking elsewhere must not steal it from where the user clicked.
+const restoreTitleFocus = () => nextTick(() => titleButton.value?.focus())
+
+const saveTitle = ({ refocus = false } = {}) => {
   if (isEditingTitle.value && activeChat.value) {
     if (
       editingTitle.value.trim() &&
@@ -267,10 +299,12 @@ const saveTitle = () => {
     }
   }
   isEditingTitle.value = false
+  if (refocus) restoreTitleFocus()
 }
 
 const cancelEditingTitle = () => {
   isEditingTitle.value = false
+  restoreTitleFocus()
 }
 
 const toggleBookmark = () => {
@@ -391,6 +425,20 @@ const handleResend = (messageId) => {
 .chat-title.disabled {
   cursor: default;
   color: var(--text-light);
+}
+
+.title-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
 }
 
 .chat-title span {

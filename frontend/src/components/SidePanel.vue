@@ -5,20 +5,20 @@
         <div class="header">
           <div class="header-actions">
             <div class="action-buttons">
-              <button
+              <IconButton
                 class="header-button"
-                title="Settings"
+                label="Settings"
                 @click="emit('open-settings')"
               >
                 <font-awesome-icon icon="cog" />
-              </button>
-              <button
+              </IconButton>
+              <IconButton
                 class="header-button"
-                title="Data Management"
+                label="Data Management"
                 @click="emit('open-data-modal')"
               >
                 <font-awesome-icon icon="database" />
-              </button>
+              </IconButton>
               <button
                 class="header-button"
                 :title="themeTitle"
@@ -31,7 +31,11 @@
             <div class="action-buttons">
               <span class="toggle-label">Stream</span>
               <label class="toggle-switch">
-                <input v-model="streamingEnabled" type="checkbox" />
+                <input
+                  v-model="streamingEnabled"
+                  type="checkbox"
+                  aria-label="Stream responses"
+                />
                 <span class="toggle-slider" title="Streaming"></span>
               </label>
             </div>
@@ -40,6 +44,7 @@
         <select
           :value="selectedModel"
           class="model-select"
+          aria-label="Model"
           @change="onModelChange"
         >
           <optgroup
@@ -67,6 +72,7 @@
             v-model="searchQuery"
             type="text"
             placeholder="Search history..."
+            aria-label="Search chat history"
             class="search-input"
           />
         </div>
@@ -81,20 +87,27 @@
               :key="chat.id"
               class="history-item"
               :class="{ active: chat.id === activeChatId }"
-              @click="loadChat(chat.id)"
             >
-              <font-awesome-icon
-                :icon="['fas', 'bookmark']"
-                class="bookmark-icon"
-              />
-              <span class="history-item-title">{{ chat.title }}</span>
+              <button
+                type="button"
+                class="history-item-open"
+                :aria-current="chat.id === activeChatId ? 'true' : undefined"
+                @click="loadChat(chat.id)"
+              >
+                <font-awesome-icon
+                  :icon="['fas', 'bookmark']"
+                  class="bookmark-icon"
+                />
+                <span class="history-item-title">{{ chat.title }}</span>
+              </button>
               <div class="sidebar-actions">
-                <button
+                <IconButton
                   class="sidebar-action-btn"
+                  :label="`Delete ${chat.title}`"
                   @click.stop="deleteChat(chat.id)"
                 >
                   <font-awesome-icon icon="trash-alt" />
-                </button>
+                </IconButton>
               </div>
             </li>
           </ul>
@@ -107,20 +120,27 @@
               :key="chat.id"
               class="history-item"
               :class="{ active: chat.id === activeChatId }"
-              @click="loadChat(chat.id)"
             >
-              <font-awesome-icon
-                :icon="['far', 'comment-dots']"
-                class="history-icon"
-              />
-              <span class="history-item-title">{{ chat.title }}</span>
+              <button
+                type="button"
+                class="history-item-open"
+                :aria-current="chat.id === activeChatId ? 'true' : undefined"
+                @click="loadChat(chat.id)"
+              >
+                <font-awesome-icon
+                  :icon="['far', 'comment-dots']"
+                  class="history-icon"
+                />
+                <span class="history-item-title">{{ chat.title }}</span>
+              </button>
               <div class="sidebar-actions">
-                <button
+                <IconButton
                   class="sidebar-action-btn"
+                  :label="`Delete ${chat.title}`"
                   @click.stop="deleteChat(chat.id)"
                 >
                   <font-awesome-icon icon="trash-alt" />
-                </button>
+                </IconButton>
               </div>
             </li>
           </ul>
@@ -131,6 +151,7 @@
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { ref, computed } from 'vue'
 import {
   THEME_PREFERENCES,
@@ -416,12 +437,27 @@ input:checked + .toggle-slider:before {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px;
+  padding-right: 8px;
   border-radius: var(--border-radius);
-  cursor: pointer;
   font-size: 14px;
   position: relative;
   color: var(--text-color);
+}
+
+.history-item-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: none;
+  border: none;
+  border-radius: inherit;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 .history-item:hover {
   background-color: var(--bg-gray);
@@ -429,7 +465,7 @@ input:checked + .toggle-slider:before {
 .history-item.active {
   background-color: var(--primary-light);
   font-weight: 500;
-  color: var(--primary-dark);
+  color: var(--primary-text);
 }
 
 .history-item-title {
@@ -477,6 +513,6 @@ input:checked + .toggle-slider:before {
   color: var(--warning-color);
 }
 .history-item.active .history-icon {
-  color: var(--primary-dark);
+  color: var(--primary-text);
 }
 </style>

@@ -11,24 +11,28 @@
   --primary-color: light-dark(#4f46e5, #818cf8);
   --primary-dark: light-dark(#4338ca, #6366f1);
   --primary-light: light-dark(#eef2ff, #23214a);
+  /* Accent-colored text on --primary-light. */
+  --primary-text: light-dark(#4338ca, #c7d2fe);
   /* Text on primary/danger fills; the dark-theme fills are light. */
   --on-primary: light-dark(#ffffff, #0f131a);
   --success-color: light-dark(#10b981, #34d399);
   --warning-color: light-dark(#f59e0b, #fbbf24);
-  --danger-color: light-dark(#ef4444, #f87171);
-  --danger-dark: light-dark(#dc2626, #ef4444);
+  --danger-color: light-dark(#dc2626, #f87171);
+  --danger-dark: light-dark(#b91c1c, #ef4444);
   --success-bg: light-dark(rgba(16, 185, 129, 0.12), rgba(52, 211, 153, 0.12));
   --success-border: light-dark(
     rgba(16, 185, 129, 0.4),
     rgba(52, 211, 153, 0.45)
   );
+  /* Text on --danger-bg and on the plain backgrounds. */
+  --danger-text: light-dark(#b91c1c, #fca5a5);
   --danger-bg: light-dark(rgba(220, 38, 38, 0.08), rgba(248, 113, 113, 0.12));
   --danger-border: light-dark(
     rgba(220, 38, 38, 0.4),
     rgba(248, 113, 113, 0.45)
   );
   --text-color: light-dark(#1f2937, #e5e7eb);
-  --text-light: light-dark(#6b7280, #9ca3af);
+  --text-light: light-dark(#596170, #9ca3af);
   --bg-color: light-dark(#ffffff, #151a23);
   --bg-light: light-dark(#f9fafb, #1b212c);
   --bg-gray: light-dark(#f3f4f6, #0f131a);

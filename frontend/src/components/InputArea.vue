@@ -54,18 +54,20 @@
               file.error
             }}</span>
           </div>
-          <button
+          <IconButton
             class="remove-attachment-btn"
+            :label="`Remove ${file.name}`"
             @click="removeAttachment(file.id)"
           >
             <font-awesome-icon icon="times" />
-          </button>
+          </IconButton>
         </div>
       </div>
 
       <textarea
         ref="promptInput"
         v-model="prompt"
+        aria-label="Message"
         placeholder="Press Ctrl + Enter to send"
         class="prompt-input"
         rows="1"
@@ -81,56 +83,60 @@
           multiple
           @change="handleFileChange"
         />
-        <button
+        <IconButton
           v-if="supportsAttachments"
           class="icon-button"
-          title="Attach file"
+          label="Attach file"
           @click="openFileInput"
         >
           <font-awesome-icon icon="paperclip" />
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           v-if="!writingFunctionCallEnabled && supportsTool('urlContext')"
           class="icon-button"
           :class="{ active: toolSettings.urlContext }"
-          title="Enable Url Context"
+          label="Enable Url Context"
+          :aria-pressed="!!toolSettings.urlContext"
           @click="toggleTool('urlContext')"
         >
           <font-awesome-icon icon="link" />
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           v-if="!writingFunctionCallEnabled && supportsTool('grounding')"
           class="icon-button"
           :class="{ active: toolSettings.grounding }"
-          title="Enable Search Grounding"
+          label="Enable Search Grounding"
+          :aria-pressed="!!toolSettings.grounding"
           @click="toggleTool('grounding')"
         >
           <font-awesome-icon icon="search" />
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           v-if="!writingFunctionCallEnabled && supportsTool('codeExecution')"
           class="icon-button"
           :class="{ active: toolSettings.codeExecution }"
-          title="Enable Code Execution"
+          label="Enable Code Execution"
+          :aria-pressed="!!toolSettings.codeExecution"
           @click="toggleTool('codeExecution')"
         >
           <font-awesome-icon icon="code" />
-        </button>
-        <button
+        </IconButton>
+        <IconButton
           class="send-button"
-          :title="sendButtonTitle"
+          :label="sendButtonTitle"
           :disabled="isSendDisabled"
           :class="{ 'is-sending': isSending }"
           @click="handleSend"
         >
           <font-awesome-icon :icon="isSending ? 'stop' : 'paper-plane'" />
-        </button>
+        </IconButton>
       </div>
     </div>
   </footer>
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useComposerStore } from '../stores/composer'
 import { useSessionStore } from '../stores/session'
@@ -567,7 +573,7 @@ onUnmounted(() => {
 
 .preview-error {
   font-size: 11px;
-  color: var(--danger-color);
+  color: var(--danger-text);
   font-weight: 500;
 }
 

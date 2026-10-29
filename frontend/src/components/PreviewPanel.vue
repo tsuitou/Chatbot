@@ -3,6 +3,7 @@
     <div class="preview-header">
       <select
         v-model="activeFileId"
+        aria-label="Previewed file"
         class="file-select"
         title="Select a file to preview"
       >
@@ -19,9 +20,13 @@
         >
           <font-awesome-icon icon="download" />
         </a>
-        <button class="action-btn" title="Close preview" @click="closePanel">
+        <IconButton
+          class="action-btn"
+          label="Close preview"
+          @click="closePanel"
+        >
           <font-awesome-icon icon="times" />
-        </button>
+        </IconButton>
       </div>
     </div>
     <div class="preview-content">
@@ -45,6 +50,7 @@
 </template>
 
 <script setup>
+import IconButton from './IconButton.vue'
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { useDisplayStore } from '../stores/display'
 const store = useDisplayStore()

@@ -10,6 +10,7 @@
           <select
             v-if="entries.length > 1"
             v-model="selectedId"
+            aria-label="Request"
             class="debug-select"
           >
             <option v-for="entry in entries" :key="entry.id" :value="entry.id">

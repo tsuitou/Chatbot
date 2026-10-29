@@ -61,7 +61,9 @@
 .message-bubble a {
   background-color: transparent;
   color: var(--fgColor-accent);
-  text-decoration: none;
+  /* Underlined: the link color alone is too close to the body text. */
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .message-bubble abbr[title] {
@@ -1249,7 +1251,7 @@
 .message-wrapper .message-alert.error {
   background-color: var(--danger-bg);
   border: 1px solid var(--danger-border);
-  color: var(--danger-dark);
+  color: var(--danger-text);
 }
 
 .message-wrapper .prose {
@@ -1489,11 +1491,10 @@
   gap: 4px;
   font-size: 12px;
   transition: all 0.2s ease;
-  opacity: 0.7;
 }
 
 .code-block-wrapper .action-btn:hover {
-  opacity: 1;
+  color: var(--text-color);
   background-color: var(--bg-hover);
 }
 
