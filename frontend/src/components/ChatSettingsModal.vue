@@ -577,7 +577,7 @@ const handleSave = async () => {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: var(--overlay-bg);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -737,14 +737,14 @@ const handleSave = async () => {
 }
 
 .transform-status.is-valid {
-  border-color: rgba(16, 185, 129, 0.4);
-  background-color: rgba(16, 185, 129, 0.12);
+  border-color: var(--success-border);
+  background-color: var(--success-bg);
   color: var(--success-color);
 }
 
 .transform-status.is-invalid {
-  border-color: rgba(239, 68, 68, 0.4);
-  background-color: rgba(239, 68, 68, 0.12);
+  border-color: var(--danger-border);
+  background-color: var(--danger-bg);
   color: var(--danger-dark);
 }
 
@@ -895,7 +895,7 @@ const handleSave = async () => {
 
 .auto-attachments.is-dragging {
   border-color: var(--primary-color);
-  background-color: rgba(33, 150, 243, 0.08);
+  background-color: var(--primary-light);
 }
 
 .auto-attachments-overlay {
@@ -978,7 +978,7 @@ const handleSave = async () => {
 
 .primary-button {
   background-color: var(--primary-color);
-  color: #ffffff;
+  color: var(--on-primary);
   border: none;
   padding: 10px 18px;
   border-radius: var(--border-radius);

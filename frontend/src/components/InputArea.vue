@@ -635,7 +635,7 @@ onUnmounted(() => {
   border-radius: var(--border-radius);
   background-color: var(--primary-color);
   border: none;
-  color: white;
+  color: var(--on-primary);
   cursor: pointer;
   display: flex;
   justify-content: center;
@@ -647,7 +647,7 @@ onUnmounted(() => {
 }
 
 .send-button:disabled {
-  color: #ccc;
+  color: var(--text-light);
   background-color: var(--bg-gray);
   cursor: not-allowed;
 }

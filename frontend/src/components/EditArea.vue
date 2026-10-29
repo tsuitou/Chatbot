@@ -599,7 +599,7 @@ onUnmounted(() => {
 
 .primary-button {
   background-color: var(--primary-color);
-  color: white;
+  color: var(--on-primary);
   border-color: var(--primary-color);
 }
 .primary-button:hover:not(:disabled) {

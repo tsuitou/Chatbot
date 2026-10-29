@@ -110,6 +110,9 @@
         class="message-bubble"
         :class="[{ 'is-streaming': isStreaming }, contentBubbleClass]"
       >
+        <div v-if="errorText" class="message-alert error" role="alert">
+          {{ errorText }}
+        </div>
         <div v-if="!isUserMessage" class="prose">
           <template
             v-for="(segment, index) in group.content.segments"
@@ -183,6 +186,13 @@ import { useSessionStore } from '../stores/session'
 import { useDisplayStore } from '../stores/display'
 import CodeBlock from './CodeBlock.vue'
 import EditArea from './EditArea.vue'
+import {
+  defaultSystemSummary as summaryFor,
+  errorText as errorTextFor,
+  formatDuration,
+  formatTimestamp,
+  senderLabel as labelFor,
+} from '../services/messageView'
 const emit = defineEmits(['edit', 'resend', 'delete'])
 
 const props = defineProps({
@@ -199,27 +209,11 @@ const displayStore = useDisplayStore()
 
 const messageId = computed(() => props.group.id)
 const isUserMessage = computed(() => props.group.sender === 'user')
-const senderLabel = computed(() => (isUserMessage.value ? 'User' : 'Model'))
-const messageTimestamp = computed(() => {
-  const createdAt = props.group?.message?.createdAt
-  if (!createdAt) return ''
-  try {
-    const locale =
-      typeof navigator !== 'undefined' && navigator.language
-        ? navigator.language
-        : undefined
-    return new Intl.DateTimeFormat(locale, {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(new Date(createdAt))
-  } catch (error) {
-    console.error('Failed to format message timestamp:', error)
-    return ''
-  }
-})
+const senderLabel = computed(() => labelFor(props.group.sender))
+const errorText = computed(() => errorTextFor(props.group.message))
+const messageTimestamp = computed(() =>
+  formatTimestamp(props.group?.message?.createdAt)
+)
 const actionsDisabled = computed(() => session.isGenerating)
 const isEditing = computed(
   () => chatStore.editing?.messageId === messageId.value
@@ -266,13 +260,9 @@ const shouldShowContentBubble = computed(() => {
   return props.group.content.shouldRender
 })
 
-const defaultSystemSummary = computed(() => {
-  if (isStreaming.value) return 'Streaming response'
-  const status = props.group.system?.status
-  if (status === 'error') return 'Generation failed'
-  if (status === 'cancelled') return 'Generation cancelled'
-  return 'No additional parameters'
-})
+const defaultSystemSummary = computed(() =>
+  summaryFor(props.group.system?.status, isStreaming.value)
+)
 
 const copyIcon = ref('copy')
 const blobUrlCache = new Map()
@@ -280,17 +270,6 @@ const blobUrlCache = new Map()
 // Duration Timer Logic
 const elapsedTime = ref(0)
 let timerInterval = null
-
-const formatDuration = (ms) => {
-  if (typeof ms !== 'number' || isNaN(ms)) return '- s'
-  const totalSeconds = ms / 1000
-  if (totalSeconds < 60) {
-    return `${totalSeconds.toFixed(1)}s`
-  }
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = Math.floor(totalSeconds % 60)
-  return `${minutes}m ${seconds}s`
-}
 
 const durationDisplay = computed(() => {
   if (isStreaming.value) {
@@ -457,271 +436,3 @@ const isUnsupported = (attachment) => {
   return unsupportedFileIds.value.has(attachment.id)
 }
 </script>
-
-<style scoped>
-.message-wrapper {
-  display: flex;
-  flex-direction: column;
-}
-
-.message-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 4px;
-}
-
-.sender-info {
-  display: flex;
-  align-items: end;
-  gap: 8px;
-}
-
-.sender-name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-color);
-}
-
-.message-timestamp {
-  font-size: 10px;
-  color: var(--text-light);
-}
-
-.message-actions {
-  display: flex;
-  gap: 8px;
-  opacity: 0;
-  visibility: hidden;
-  transition: var(--transition);
-}
-
-.message-wrapper:hover .message-actions {
-  opacity: 1;
-  visibility: visible;
-}
-
-.message-actions button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--text-light);
-  font-size: 12px;
-  padding: 0px 4px;
-}
-
-.message-actions button:hover {
-  color: var(--text-color);
-}
-
-.message-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.message-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.message-alert {
-  margin-bottom: 12px;
-  padding: 12px;
-  border-radius: var(--border-radius);
-  font-size: 14px;
-}
-
-.message-alert.error {
-  background-color: rgba(220, 38, 38, 0.1);
-  border: 1px solid rgba(220, 38, 38, 0.4);
-  color: #dc2626;
-}
-
-.prose {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-color);
-}
-
-.plain-user-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text-color);
-}
-
-.status-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: auto;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 12px;
-  color: var(--text-light);
-  font-size: 11px;
-  font-family: monospace;
-  background-color: var(--bg-gray);
-  transition:
-    color 0.2s,
-    background-color 0.2s;
-}
-
-.status-icon.streaming {
-  color: var(--text-light);
-  background-color: transparent;
-}
-
-.duration-text {
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-.thought-stream {
-  margin-top: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.thought-stream-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  background: none;
-  border: none;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    color 0.15s ease;
-}
-
-.thought-stream-header.disabled {
-  cursor: default;
-  pointer-events: none;
-}
-
-.thought-stream-header.disabled:hover {
-  background: none;
-}
-
-.thought-stream-header:hover {
-  background-color: var(--bg-gray-stronger);
-}
-
-.thought-stream-header:focus-visible {
-  outline: 2px solid var(--primary-color);
-  outline-offset: 2px;
-}
-
-.system-summary {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--text-light);
-  flex: 1;
-}
-
-.summary-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.summary-item svg {
-  color: var(--text-light);
-}
-
-.summary-item--placeholder span {
-  font-style: italic;
-}
-
-.thought-chevron {
-  font-size: 12px;
-  color: var(--text-light);
-  flex-shrink: 0;
-}
-
-.thought-stream-header.disabled .thought-chevron {
-  display: none;
-}
-
-.thought-stream-content {
-  font-size: 13px;
-  color: var(--text-color);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 12px 12px;
-}
-
-.metadata {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  line-height: 1.3;
-  color: var(--text-light);
-  align-self: flex-start;
-  max-width: 100%;
-}
-
-.metadata-item {
-  display: block;
-}
-
-.metadata-item a {
-  color: inherit;
-  text-decoration: underline;
-}
-
-.attachment-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.attachment-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background-color: var(--bot-message-bg);
-  color: var(--text-color);
-  padding: 6px 12px;
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border-color);
-  border-radius: 16px;
-  font-size: 13px;
-  text-decoration: none;
-  transition: var(--transition);
-}
-
-.attachment-chip:hover {
-  background-color: var(--bg-grey);
-}
-
-.attachment-chip.expired,
-.attachment-chip.unsupported {
-  opacity: 0.5;
-  filter: grayscale(80%);
-}
-
-.fade-enter-active,
-.fade-leave-active {
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

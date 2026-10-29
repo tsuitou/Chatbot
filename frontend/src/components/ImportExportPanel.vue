@@ -198,7 +198,7 @@ p {
 }
 .action-btn {
   background-color: var(--primary-color);
-  color: white;
+  color: var(--on-primary);
   border: none;
   padding: 8px 16px;
   border-radius: var(--border-radius);
@@ -220,7 +220,7 @@ p {
 }
 .danger-btn {
   background-color: var(--danger-color);
-  color: white;
+  color: var(--on-primary);
   border: none;
   padding: 8px 16px;
   border-radius: var(--border-radius);

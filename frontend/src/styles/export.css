@@ -1,0 +1,102 @@
+/*
+ * Stylesheet embedded in exported chats. Messages use the app's own
+ * tokens.css and message.css; this file only adds the standalone page
+ * around them (header, theme switch, width).
+ */
+@import './tokens.css';
+@import './message.css';
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+  line-height: 1.5;
+  background-color: var(--bg-gray);
+  color: var(--text-color);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.export-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px max(16px, calc((100% - 880px) / 2));
+  background-color: var(--bg-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.export-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.export-meta {
+  font-size: 12px;
+  color: var(--text-light);
+  white-space: nowrap;
+}
+
+.theme-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-light);
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.theme-switch:hover {
+  color: var(--text-color);
+  background-color: var(--bg-hover);
+}
+
+.message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+/* Exported messages have no actions, so the header never needs room. */
+.message-wrapper .message-header {
+  min-height: 0;
+}
+
+.message-wrapper .attachment-list {
+  margin-top: 4px;
+}
+
+@media print {
+  .export-header {
+    position: static;
+  }
+  .theme-switch,
+  .code-block-wrapper .actions {
+    display: none;
+  }
+}

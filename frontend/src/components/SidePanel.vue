@@ -19,6 +19,14 @@
               >
                 <font-awesome-icon icon="database" />
               </button>
+              <button
+                class="header-button"
+                :title="themeTitle"
+                :aria-label="themeTitle"
+                @click="cycleTheme"
+              >
+                <font-awesome-icon :icon="themeIcon" />
+              </button>
             </div>
             <div class="action-buttons">
               <span class="toggle-label">Stream</span>
@@ -124,6 +132,11 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import {
+  THEME_PREFERENCES,
+  getThemePreference,
+  setThemePreference,
+} from '../services/theme'
 import { useChatsStore } from '../stores/chats'
 import { useComposerStore } from '../stores/composer'
 import { useModelsStore } from '../stores/models'
@@ -134,6 +147,22 @@ const composer = useComposerStore()
 const models = useModelsStore()
 const session = useSessionStore()
 const searchQuery = ref('')
+
+const THEME_LABELS = { system: 'System', light: 'Light', dark: 'Dark' }
+const THEME_ICONS = { system: 'circle-half-stroke', light: 'sun', dark: 'moon' }
+const themePreference = ref(getThemePreference())
+const nextTheme = computed(() => {
+  const index = THEME_PREFERENCES.indexOf(themePreference.value)
+  return THEME_PREFERENCES[(index + 1) % THEME_PREFERENCES.length]
+})
+const themeIcon = computed(() => THEME_ICONS[themePreference.value])
+const themeTitle = computed(
+  () =>
+    `Theme: ${THEME_LABELS[themePreference.value]} (switch to ${THEME_LABELS[nextTheme.value]})`
+)
+const cycleTheme = () => {
+  themePreference.value = setThemePreference(nextTheme.value)
+}
 
 // --- Computed properties ---
 const availableModels = computed(() => models.availableModels)
@@ -304,7 +333,7 @@ input:checked + .toggle-slider:before {
   padding: 8px;
   border-radius: var(--border-radius);
   background-color: var(--primary-color);
-  color: white;
+  color: var(--on-primary);
   border: none;
   cursor: pointer;
   font-size: 15px;

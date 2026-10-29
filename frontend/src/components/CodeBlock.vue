@@ -38,9 +38,10 @@
 
 <script setup>
 import { ref, onMounted, computed, nextTick, onUnmounted } from 'vue'
-import hljs from 'highlight.js'
+import { highlightCode } from '../services/highlight'
 import DOMPurify from 'dompurify'
 import mermaid from 'mermaid'
+import { isDarkThemeActive } from '../services/theme'
 const props = defineProps({
   content: { type: String, required: true },
   lang: { type: String, default: 'plaintext' },
@@ -66,35 +67,10 @@ const isSpecialLang = computed(
 )
 const canToggleView = computed(() => isSpecialLang.value)
 
-const highlightedHtml = computed(() => {
-  const raw = props.content ?? ''
-  const lang = (props.lang || '').toLowerCase()
-
-  if (lang === 'mermaid') {
-    return DOMPurify.sanitize(
-      hljs.highlight(raw, { language: 'plaintext' }).value
-    )
-  }
-  if (lang === 'svg') {
-    return DOMPurify.sanitize(hljs.highlight(raw, { language: 'svg' }).value)
-  }
-
-  try {
-    if (lang && hljs.getLanguage(lang)) {
-      return DOMPurify.sanitize(hljs.highlight(raw, { language: lang }).value)
-    }
-    const auto = hljs.highlightAuto(raw)
-    return DOMPurify.sanitize(auto.value)
-  } catch {
-    return DOMPurify.sanitize(
-      hljs.highlight(raw, { language: 'plaintext' }).value
-    )
-  }
-})
+const highlightedHtml = computed(() => highlightCode(props.content, props.lang))
 
 onMounted(async () => {
   if (canToggleView.value) {
-    mermaid.initialize({ startOnLoad: false, theme: 'neutral' })
     if (!showSource.value) {
       await renderContent()
     }
@@ -143,6 +119,11 @@ const renderContent = async () => {
 
   if (props.lang === 'mermaid') {
     try {
+      // Re-read the theme on every render so a switch since mount applies.
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: isDarkThemeActive() ? 'dark' : 'neutral',
+      })
       const uniqueId = `mermaid-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
       const { svg } = await mermaid.render(
         uniqueId,
@@ -267,82 +248,3 @@ const wrapperPaddingStyle = computed(() => {
   }
 })
 </script>
-
-<style scoped>
-.code-block-wrapper {
-  border-radius: var(--border-radius);
-  border: 1px solid var(--border-color);
-  background-color: var(--bg-light);
-  margin: 8px 0;
-  white-space: pre;
-  overflow: auto;
-  width: auto;
-  position: relative;
-}
-.code-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: var(--bg-light);
-  padding: 4px 12px;
-  font-size: 12px;
-  top: 0;
-  transition:
-    box-shadow 0.2s ease,
-    background-color 0.2s ease,
-    transform 0.2s ease,
-    opacity 0.2s ease;
-}
-.language-name {
-  font-family: monospace;
-  color: var(--text-light);
-}
-.actions {
-  display: flex;
-  gap: 8px;
-}
-.action-btn {
-  background: none;
-  border: none;
-  color: var(--text-light);
-  padding: 4px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  transition: all 0.2s ease;
-  opacity: 0.7;
-}
-.action-btn:hover {
-  opacity: 1;
-  background-color: rgba(255, 255, 255, 0.1);
-}
-.code-content {
-  background-color: var(--bg-light);
-  padding: 12px;
-}
-.render-view {
-  background-color: var(--bg-light);
-  padding: 16px;
-  border-radius: 4px;
-}
-pre,
-code {
-  margin: 0;
-  padding: 0;
-  padding-bottom: 12px; /* Extra space for horizontal scrollbar */
-  background: none;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 14px;
-}
-.code-header.pinned {
-  background-color: var(--bg-light);
-  border-top: 1px solid var(--border-color);
-  border-left: 1px solid var(--border-color);
-  border-right: 1px solid var(--border-color);
-  border-radius: 4px;
-  transform: translateY(2px);
-}
-</style>

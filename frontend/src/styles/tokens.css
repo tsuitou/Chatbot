@@ -1,0 +1,148 @@
+/*
+ * Color and size tokens shared by the app and exported chats.
+ *
+ * Every color is a light-dark() pair, so one definition serves both themes:
+ * the page follows the OS by default and data-theme="light" / "dark" on the
+ * root element pins it.
+ */
+:root {
+  color-scheme: light dark;
+
+  --primary-color: light-dark(#4f46e5, #818cf8);
+  --primary-dark: light-dark(#4338ca, #6366f1);
+  --primary-light: light-dark(#eef2ff, #23214a);
+  /* Text on primary/danger fills; the dark-theme fills are light. */
+  --on-primary: light-dark(#ffffff, #0f131a);
+  --success-color: light-dark(#10b981, #34d399);
+  --warning-color: light-dark(#f59e0b, #fbbf24);
+  --danger-color: light-dark(#ef4444, #f87171);
+  --danger-dark: light-dark(#dc2626, #ef4444);
+  --success-bg: light-dark(rgba(16, 185, 129, 0.12), rgba(52, 211, 153, 0.12));
+  --success-border: light-dark(
+    rgba(16, 185, 129, 0.4),
+    rgba(52, 211, 153, 0.45)
+  );
+  --danger-bg: light-dark(rgba(220, 38, 38, 0.08), rgba(248, 113, 113, 0.12));
+  --danger-border: light-dark(
+    rgba(220, 38, 38, 0.4),
+    rgba(248, 113, 113, 0.45)
+  );
+  --text-color: light-dark(#1f2937, #e5e7eb);
+  --text-light: light-dark(#6b7280, #9ca3af);
+  --bg-color: light-dark(#ffffff, #151a23);
+  --bg-light: light-dark(#f9fafb, #1b212c);
+  --bg-gray: light-dark(#f3f4f6, #0f131a);
+  --bg-hover: light-dark(#e5e7eb, #262e3b);
+  --border-color: light-dark(#e5e7eb, #2b3442);
+  --user-message-bg: light-dark(#f0f9ff, #16263a);
+  --bot-message-bg: light-dark(#ffffff, #171d27);
+  --overlay-bg: light-dark(rgba(17, 24, 39, 0.45), rgba(0, 0, 0, 0.6));
+  --focus-ring: light-dark(#4f46e5, #a5b4fc);
+
+  --shadow-color: light-dark(rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.45));
+  --shadow-sm: 0 1px 2px 0 var(--shadow-color);
+  --shadow: 0 1px 3px 0 var(--shadow-color), 0 1px 2px 0 var(--shadow-color);
+  --shadow-md:
+    0 4px 6px -1px var(--shadow-color), 0 2px 4px -1px var(--shadow-color);
+  --shadow-lg:
+    0 10px 15px -3px var(--shadow-color), 0 4px 6px -2px var(--shadow-color);
+
+  --sidebar-width: 260px;
+  --border-radius: 8px;
+  --transition: all 0.3s ease;
+
+  /* Markdown body (GitHub-style), see message.css */
+  --base-size-4: 0.2rem;
+  --base-size-8: 0.4rem;
+  --base-size-16: 0.8rem;
+  --base-size-24: 1.2rem;
+  --base-size-40: 2rem;
+  --base-text-weight-normal: 400;
+  --base-text-weight-medium: 500;
+  --base-text-weight-semibold: 600;
+  --fontStack-monospace:
+    ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono,
+    monospace;
+  --focus-outlineColor: light-dark(#0969da, #1f6feb);
+  --fgColor-default: light-dark(#1f2328, #f0f6fc);
+  --fgColor-muted: light-dark(#59636e, #9198a1);
+  --fgColor-accent: light-dark(#0969da, #4493f8);
+  --fgColor-success: light-dark(#1a7f37, #3fb950);
+  --fgColor-attention: light-dark(#9a6700, #d29922);
+  --fgColor-danger: light-dark(#d1242f, #f85149);
+  --fgColor-done: light-dark(#8250df, #ab7df8);
+  --bgColor-default: light-dark(#ffffff, #0d1117);
+  --bgColor-muted: light-dark(#f6f8fa, #151b23);
+  --bgColor-neutral-muted: light-dark(#818b981f, #656c7633);
+  --bgColor-attention-muted: light-dark(#fff8c5, #bb800926);
+  --borderColor-default: light-dark(#d1d9e0, #3d444d);
+  --borderColor-muted: light-dark(#d1d9e0b3, #3d444db3);
+  --borderColor-neutral-muted: light-dark(#d1d9e0b3, #3d444db3);
+  --borderColor-accent-emphasis: light-dark(#0969da, #1f6feb);
+  --borderColor-success-emphasis: light-dark(#1a7f37, #238636);
+  --borderColor-attention-emphasis: light-dark(#9a6700, #9e6a03);
+  --borderColor-danger-emphasis: light-dark(#cf222e, #da3633);
+  --borderColor-done-emphasis: light-dark(#8250df, #8957e5);
+  --color-prettylights-syntax-comment: light-dark(#59636e, #9198a1);
+  --color-prettylights-syntax-constant: light-dark(#0550ae, #79c0ff);
+  --color-prettylights-syntax-constant-other-reference-link: light-dark(
+    #0a3069,
+    #a5d6ff
+  );
+  --color-prettylights-syntax-entity: light-dark(#6639ba, #d2a8ff);
+  --color-prettylights-syntax-storage-modifier-import: light-dark(
+    #1f2328,
+    #f0f6fc
+  );
+  --color-prettylights-syntax-entity-tag: light-dark(#0550ae, #7ee787);
+  --color-prettylights-syntax-keyword: light-dark(#cf222e, #ff7b72);
+  --color-prettylights-syntax-string: light-dark(#0a3069, #a5d6ff);
+  --color-prettylights-syntax-variable: light-dark(#953800, #ffa657);
+  --color-prettylights-syntax-brackethighlighter-unmatched: light-dark(
+    #82071e,
+    #f85149
+  );
+  --color-prettylights-syntax-brackethighlighter-angle: light-dark(
+    #59636e,
+    #9198a1
+  );
+  --color-prettylights-syntax-invalid-illegal-text: light-dark(
+    #f6f8fa,
+    #f0f6fc
+  );
+  --color-prettylights-syntax-invalid-illegal-bg: light-dark(#82071e, #8e1519);
+  --color-prettylights-syntax-carriage-return-text: light-dark(
+    #f6f8fa,
+    #f0f6fc
+  );
+  --color-prettylights-syntax-carriage-return-bg: light-dark(#cf222e, #b62324);
+  --color-prettylights-syntax-string-regexp: light-dark(#116329, #7ee787);
+  --color-prettylights-syntax-markup-list: light-dark(#3b2300, #f2cc60);
+  --color-prettylights-syntax-markup-heading: light-dark(#0550ae, #1f6feb);
+  --color-prettylights-syntax-markup-italic: light-dark(#1f2328, #f0f6fc);
+  --color-prettylights-syntax-markup-bold: light-dark(#1f2328, #f0f6fc);
+  --color-prettylights-syntax-markup-deleted-text: light-dark(#82071e, #ffdcd7);
+  --color-prettylights-syntax-markup-deleted-bg: light-dark(#ffebe9, #67060c);
+  --color-prettylights-syntax-markup-inserted-text: light-dark(
+    #116329,
+    #aff5b4
+  );
+  --color-prettylights-syntax-markup-inserted-bg: light-dark(#dafbe1, #033a16);
+  --color-prettylights-syntax-markup-changed-text: light-dark(#953800, #ffdfb6);
+  --color-prettylights-syntax-markup-changed-bg: light-dark(#ffd8b5, #5a1e02);
+  --color-prettylights-syntax-markup-ignored-text: light-dark(#d1d9e0, #f0f6fc);
+  --color-prettylights-syntax-markup-ignored-bg: light-dark(#0550ae, #1158c7);
+  --color-prettylights-syntax-meta-diff-range: light-dark(#8250df, #d2a8ff);
+  --color-prettylights-syntax-sublimelinter-gutter-mark: light-dark(
+    #818b98,
+    #3d444d
+  );
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}

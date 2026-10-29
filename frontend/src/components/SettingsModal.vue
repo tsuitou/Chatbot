@@ -505,7 +505,7 @@ const reset = () => {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: var(--overlay-bg);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -706,7 +706,7 @@ const reset = () => {
 
 .primary-button {
   background-color: var(--primary-color);
-  color: #ffffff;
+  color: var(--on-primary);
   border: none;
   padding: 10px 18px;
   border-radius: var(--border-radius);

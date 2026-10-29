@@ -3,11 +3,14 @@ import { createPinia } from 'pinia'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import Toast from 'vue-toastification'
 import 'vue-toastification/dist/index.css'
-import 'highlight.js/styles/vs.css'
 import 'katex/dist/katex.min.css'
 import './style.css'
 import App from './App.vue'
 import './icons'
+import { applyThemePreference, getThemePreference } from './services/theme'
+
+// Before mounting, so the first paint already has the chosen theme.
+applyThemePreference(getThemePreference())
 
 const app = createApp(App)
 const pinia = createPinia()

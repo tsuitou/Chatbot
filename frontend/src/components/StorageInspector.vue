@@ -359,7 +359,7 @@ pre {
 }
 .danger-btn {
   background-color: var(--danger-color);
-  color: white;
+  color: var(--on-primary);
   border: none;
   padding: 6px 12px;
   border-radius: var(--border-radius);
@@ -371,7 +371,7 @@ pre {
 }
 .danger-btn-sm {
   background-color: var(--danger-color);
-  color: white;
+  color: var(--on-primary);
   border: none;
   padding: 4px 8px;
   border-radius: 4px;
