@@ -1148,6 +1148,11 @@ function buildArchiveManifest(
   }
 }
 
+/**
+ * @typedef {{ kind?: 'all' | 'history' | 'settings' | 'selected', chatIds?: string[] }} ArchiveScope
+ */
+
+/** @param {ArchiveScope} [scope] */
 export async function exportArchive(scope = { kind: 'all' }) {
   const db = await dbPromise
   const tx = db.transaction(STORE_NAME, 'readonly')
@@ -1156,10 +1161,9 @@ export async function exportArchive(scope = { kind: 'all' }) {
   const includeHistory = kind === 'all' || kind === 'history'
   const includeSettings = kind === 'all' || kind === 'settings'
 
-  const chats =
-    includeHistory && kind !== 'selected'
-      ? await store.index(IDX_BY_TYPE).getAll(TYPE_CHAT)
-      : []
+  const chats = includeHistory
+    ? await store.index(IDX_BY_TYPE).getAll(TYPE_CHAT)
+    : []
   const settings = includeSettings
     ? await store.index(IDX_BY_TYPE).getAll(TYPE_SETTING)
     : []

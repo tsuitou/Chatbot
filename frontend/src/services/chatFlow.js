@@ -1,6 +1,13 @@
 import { v4 as uuidv4 } from 'uuid'
 import { cloneAttachment } from './attachments'
 
+/**
+ * @typedef {import('../types').Message} Message
+ * @typedef {import('../types').Attachment} Attachment
+ * @typedef {import('../types').RequestConfig} RequestConfig
+ * @typedef {import('../types').GenerationPlan} GenerationPlan
+ */
+
 function createDefaultContentRuntimeState() {
   return {
     isStreaming: false,
@@ -103,13 +110,14 @@ function normalizeAutoAttachments(list, sender) {
   )
 }
 
+/** @type {import('../types').Sender[]} */
+const SENDERS = ['user', 'model', 'system', 'tool']
+
+/** @returns {import('../types').Sender} */
 function coerceAutoSender(role) {
   if (typeof role !== 'string') return 'user'
   const normalized = role.trim().toLowerCase()
-  if (['user', 'model', 'system', 'tool'].includes(normalized)) {
-    return normalized
-  }
-  return 'user'
+  return SENDERS.find((sender) => sender === normalized) || 'user'
 }
 
 function syncContentRuntimeFromMessage(message) {
@@ -151,6 +159,12 @@ function setContentStreamingState(message, isStreaming) {
   return runtimeContent
 }
 
+/**
+ * Auto messages as history entries placed around the anchor sequence.
+ * @param {import('../types').AutoMessage[]} autoList
+ * @param {{ location: 'pre' | 'post', userSequence: number }} placement
+ * @returns {Message[]}
+ */
 function buildAutoMessageEntries(autoList, { location, userSequence }) {
   if (!Array.isArray(autoList) || !autoList.length) return []
   const createdAt = Date.now()
@@ -176,6 +190,10 @@ function buildAutoMessageEntries(autoList, { location, userSequence }) {
   })
 }
 
+/**
+ * @param {{ sequence: number, text: string, attachments?: Attachment[], configSnapshot?: RequestConfig }} args
+ * @returns {Message}
+ */
 function createUserMessage({ sequence, text, attachments, configSnapshot }) {
   const ts = Date.now()
   return {
@@ -195,6 +213,11 @@ function createUserMessage({ sequence, text, attachments, configSnapshot }) {
   }
 }
 
+/**
+ * An empty model message that a stream will fill.
+ * @param {{ sequence: number, requestId: string, configSnapshot?: RequestConfig }} args
+ * @returns {Message}
+ */
 function createModelMessage({ sequence, requestId, configSnapshot }) {
   const ts = Date.now()
   return {
@@ -219,6 +242,11 @@ function createModelMessage({ sequence, requestId, configSnapshot }) {
   }
 }
 
+/**
+ * A normalized copy safe to keep in the store.
+ * @param {Message | null | undefined} raw
+ * @returns {Message | null}
+ */
 function prepareMessageForState(raw) {
   if (!raw) return null
   const normalized = {
@@ -241,6 +269,10 @@ function prepareMessageForState(raw) {
   return normalized
 }
 
+/**
+ * @param {Message[]} list
+ * @returns {Message[]}
+ */
 function hydrateMessages(list) {
   if (!Array.isArray(list)) return []
   return list
@@ -249,6 +281,7 @@ function hydrateMessages(list) {
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
 }
 
+/** @param {Message} message */
 function isInvalidModelHistoryMessage(message) {
   return (
     message?.sender === 'model' &&
@@ -256,6 +289,11 @@ function isInvalidModelHistoryMessage(message) {
   )
 }
 
+/**
+ * History plus auto messages, in send order.
+ * @param {{ historyMessages: Message[], autoMessages: { pre: import('../types').AutoMessage[], post: import('../types').AutoMessage[] }, anchorSequence: number }} args
+ * @returns {Message[]}
+ */
 function prepareRequestMessages({
   historyMessages,
   autoMessages,
@@ -286,18 +324,27 @@ function prepareRequestMessages({
 // Sequences are spaced by 10 so auto messages can be slotted in between.
 const SEQUENCE_STEP = 10
 
+/**
+ * @param {Message[]} messages
+ * @returns {Message[]}
+ */
 function sortBySequence(messages) {
   return [...(messages || [])].sort(
     (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
   )
 }
 
+/** @param {Pick<Message, 'sequence'>[]} messages */
 function nextSequence(messages) {
   if (!messages?.length) return SEQUENCE_STEP
   return Math.max(...messages.map((m) => m.sequence ?? 0)) + SEQUENCE_STEP
 }
 
 // A new prompt goes after everything in the chat and its response right after.
+/**
+ * @param {Message[]} messages
+ * @returns {GenerationPlan & { userSequence: number }}
+ */
 function planSend(messages) {
   const userSequence = nextSequence(messages)
   return {
@@ -309,6 +356,11 @@ function planSend(messages) {
 
 // Rerunning a model message replaces it (and everything after); rerunning a
 // user message keeps it and replaces everything after it.
+/**
+ * @param {Message[]} messages
+ * @param {string} targetId
+ * @returns {(GenerationPlan & { pruneIds: string[], historyMessages: Message[] }) | null}
+ */
 function planResend(messages, targetId) {
   const sorted = sortBySequence(messages)
   const index = sorted.findIndex((m) => m.id === targetId)

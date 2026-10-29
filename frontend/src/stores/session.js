@@ -80,16 +80,30 @@ function recordDebugRequest(payload) {
   }
 }
 
+/**
+ * The request currently streaming into a model message.
+ * @typedef {object} ActiveStream
+ * @property {string} chatId
+ * @property {string} messageId
+ * @property {string} requestId
+ * @property {string | null} [providerId]
+ * @property {boolean} [watchIdle] Stop it if it stays silent too long.
+ */
+
 // Orchestrates user intents that span stores: sending and streaming
 // responses, and navigation that has to stop a running generation first.
 export const useSessionStore = defineStore('session', {
   state: () => ({
     generationState: {
+      /** @type {'idle' | 'streaming' | 'error'} */
       status: GenerationStatus.IDLE,
+      /** @type {ActiveStream | null} */
       stream: null,
+      /** @type {unknown} */
       lastError: null,
     },
     connectionState: {
+      /** @type {import('../services/socket').ConnectionStatus} */
       status: ConnectionStatus.CONNECTING,
     },
   }),
@@ -198,6 +212,11 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
+    /**
+     * Buffers a streamed chunk for the active request.
+     * @param {import('../types').StreamChunk} rawChunk
+     * @returns {Promise<boolean>} false if the chunk does not belong here.
+     */
     async handleStreamChunk(rawChunk) {
       const chats = useChatsStore()
       if (!chats.active || !this.isGenerating) return false

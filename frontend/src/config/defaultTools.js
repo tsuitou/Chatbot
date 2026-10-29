@@ -7,7 +7,7 @@ function parseEnvBoolean(value, fallback) {
 }
 
 export function createDefaultToolSettings() {
-  const env = import.meta.env || {}
+  const env = import.meta.env
   return {
     urlContext: parseEnvBoolean(env.VITE_DEFAULT_TOOL_URL_CONTEXT, true),
     grounding: parseEnvBoolean(env.VITE_DEFAULT_TOOL_SEARCH, false),

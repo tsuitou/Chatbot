@@ -100,6 +100,16 @@ function buildRoutingPayload(routing = {}) {
   return Object.keys(provider).length ? { provider } : {}
 }
 
+/**
+ * Builds the provider-neutral request the backend expects.
+ * @param {object} args
+ * @param {string} [args.chatId]
+ * @param {import('../types').Message[]} [args.messages]
+ * @param {string} args.model
+ * @param {Partial<import('../types').RequestConfig>} [args.requestConfig]
+ * @param {boolean} [args.streaming]
+ * @param {string} [args.requestId]
+ */
 export async function createApiRequest({
   chatId,
   messages = [],

@@ -28,6 +28,18 @@ const socket = io(resolveSocketUrl(), {
   path: resolveSocketPath(),
 })
 
+/**
+ * @typedef {'connecting' | 'connected' | 'disconnected'} ConnectionStatus
+ * @typedef {object} SocketHandlers
+ * @property {(chunk: import('../types').StreamChunk) => boolean | void | Promise<boolean | void>} onChunk
+ *   Resolve to false to report the chunk as ignored in its ack.
+ * @property {(result: { chatId: string, requestId: string, aborted?: boolean, reason?: string, finishReason?: string }) => void} onEnd
+ * @property {(error: { chatId?: string, requestId?: string, error?: string, message?: string, metadata?: object }) => void} onError
+ * @property {(reason: string) => void} onDisconnect
+ * @property {(status: ConnectionStatus) => void} onConnectionChange
+ */
+
+/** @type {SocketHandlers} */
 let handlers = {
   onChunk: () => {},
   onEnd: () => {},
@@ -36,6 +48,7 @@ let handlers = {
   onConnectionChange: () => {},
 }
 
+/** @param {Partial<SocketHandlers>} next */
 export const registerSocketHandlers = ({
   onChunk,
   onEnd,

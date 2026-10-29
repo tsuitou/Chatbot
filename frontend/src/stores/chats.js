@@ -66,10 +66,14 @@ function downloadBlob(blob, filename) {
 // store, which calls into this one.
 export const useChatsStore = defineStore('chats', {
   state: () => ({
+    /** @type {import('../types').ChatMeta[]} */
     list: [],
-    active: null, // { meta, messages }
+    /** @type {{ meta: import('../types').ChatMeta, messages: import('../types').Message[] } | null} */
+    active: null,
+    /** @type {string[]} */
     deletingIds: [],
-    editing: null, // { messageId, draftText, attachmentBucket }
+    /** @type {{ messageId: string, draftText: string, attachmentBucket: ReturnType<typeof import('../services/attachments').createAttachmentBucket> } | null} */
+    editing: null,
     scrollToken: 0,
   }),
 
@@ -323,6 +327,12 @@ export const useChatsStore = defineStore('chats', {
       void this.persistActiveMessage(message, { touchChat: false })
     },
 
+    /**
+     * Removes messages from the open chat and the database.
+     * @param {string} chatId
+     * @param {string[]} messageIds
+     * @param {{ warnPrefix?: string }} [options]
+     */
     async cleanupMessages(chatId, messageIds, { warnPrefix } = {}) {
       const ids = Array.isArray(messageIds) ? messageIds.filter(Boolean) : []
       if (!chatId || !ids.length) return false

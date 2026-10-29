@@ -12,6 +12,10 @@ const DEFAULT_ATTACHMENT_POLICY = Object.freeze({
   maxInlineFileSize: null,
 })
 
+/**
+ * @param {Blob | null | undefined} value
+ * @param {{ mimeType?: string }} [options]
+ */
 function cloneBlobValue(value, { mimeType } = {}) {
   if (!value) return null
 

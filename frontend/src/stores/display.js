@@ -6,6 +6,22 @@ import {
   buildMetadataHtml,
 } from '../services/messageMetadata'
 
+/**
+ * @typedef {import('../types').Message} Message
+ * @typedef {import('../types').Attachment} Attachment
+ * @typedef {import('../types').Segment} Segment
+ */
+
+/**
+ * What Message.vue renders for one message.
+ * @typedef {object} MessageGroup
+ * @property {string} id
+ * @property {Message['sender']} sender
+ * @property {Message} message
+ * @property {{ key: string, messageId: string, status: string, indicators: { icon?: string, text: string }[], thoughtSegments: Segment[], hasThoughts: boolean, isStreamingThoughts: boolean, updatedAt: number | null, isCollapsed: boolean, shouldRender: boolean }} system
+ * @property {{ key: string, messageId: string, sender: Message['sender'], status: string, segments: Segment[], attachments: Attachment[], metadataHtml: string, shouldRender?: boolean }} content
+ */
+
 const PREVIEWABLE_MIMES = new Set([
   'image/png',
   'image/jpeg',
@@ -96,7 +112,12 @@ function isThoughtCollapsed(message) {
   return message.uiFlags?.thoughtsCollapsed !== false
 }
 
+/**
+ * @param {Message} message
+ * @returns {MessageGroup}
+ */
 function buildGroup(message) {
+  /** @type {Partial<import('../types').MessageRuntime['system']['thoughts']>} */
   const thoughtsState = message.runtime?.system?.thoughts || {}
   const thoughtSegments = renderSegments(
     `${message.id}:thoughts`,
@@ -163,10 +184,12 @@ function pruneCaches(liveIds) {
 
 export const useDisplayStore = defineStore('display', {
   state: () => ({
+    /** @type {string | null} */
     previewFileId: null,
   }),
 
   getters: {
+    /** @returns {MessageGroup[]} */
     messageGroups() {
       const messages = useChatsStore().activeMessages
       const liveIds = new Set()
@@ -183,6 +206,7 @@ export const useDisplayStore = defineStore('display', {
       return groups
     },
 
+    /** @returns {Attachment[]} */
     previewableFiles() {
       const files = []
       const seen = new Set()
@@ -197,15 +221,18 @@ export const useDisplayStore = defineStore('display', {
     },
 
     // Closes by itself when the previewed attachment disappears.
+    /** @returns {Attachment | null} */
     activePreviewFile(state) {
       if (!state.previewFileId) return null
       return (
         this.previewableFiles.find((f) => f.id === state.previewFileId) || null
       )
     },
+    /** @returns {string | null} */
     activePreviewFileId() {
       return this.activePreviewFile?.id ?? null
     },
+    /** @returns {boolean} */
     isPreviewOpen() {
       return !!this.activePreviewFile
     },

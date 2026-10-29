@@ -73,6 +73,10 @@ export const getDefaultModel = async () => {
   }
 }
 
+/**
+ * @param {File} file
+ * @param {{ model?: string, providerId?: string | null, onProgress?: (percent: number) => void }} [options]
+ */
 export const uploadFile = async (
   file,
   { model, providerId, onProgress } = {}

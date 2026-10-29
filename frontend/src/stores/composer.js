@@ -4,6 +4,11 @@ import { createAttachmentBucket } from '../services/attachments'
 import { createDefaultToolSettings } from '../config/defaultTools'
 import { useModelsStore } from './models'
 
+/**
+ * @typedef {import('../types').ModelCapabilities} ModelCapabilities
+ * @typedef {import('../types').RequestConfig} RequestConfig
+ */
+
 function enabledTools(selectedTools = {}, toolDefinitions = {}) {
   const result = {}
   for (const [key, definition] of Object.entries(toolDefinitions || {})) {
@@ -18,9 +23,12 @@ function enabledTools(selectedTools = {}, toolDefinitions = {}) {
 export const useComposerStore = defineStore('composer', {
   state: () => ({
     prompt: '',
+    /** @type {string | null} */
     model: null,
+    /** @type {string | null} */
     providerId: null,
     streamingEnabled: true,
+    /** @type {Record<string, boolean>} */
     tools: createDefaultToolSettings(),
     attachmentBucket: createAttachmentBucket(),
   }),
@@ -28,6 +36,7 @@ export const useComposerStore = defineStore('composer', {
   getters: {
     // The composer may not know the provider (e.g. a plain model list) while
     // the model's saved settings do. Every lookup and request uses this one.
+    /** @returns {string | null} */
     effectiveProviderId(state) {
       return (
         state.providerId ||
@@ -35,17 +44,20 @@ export const useComposerStore = defineStore('composer', {
         null
       )
     },
+    /** @returns {ModelCapabilities} */
     capabilities(state) {
       return useModelsStore().capabilitiesFor(
         state.model,
         this.effectiveProviderId
       )
     },
+    /** @returns {Record<string, { enabled?: boolean }>} */
     toolDefinitions() {
       return this.capabilities.tools || {}
     },
     // Everything a request needs from the composer; the session adds the
     // chat-specific system instruction.
+    /** @returns {RequestConfig} */
     requestConfig(state) {
       const settings = useModelsStore().settingsFor(state.model)
       const tools =

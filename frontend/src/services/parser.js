@@ -47,6 +47,7 @@ export function parseModelResponseSync(rawText) {
 
   const processNonCodeNodes = () => {
     if (nonCodeNodesBuffer.length > 0) {
+      /** @type {Parameters<typeof segmentProcessor.run>[0]} */
       const segmentTree = { type: 'root', children: nonCodeNodesBuffer }
       const file = segmentProcessor.runSync(segmentTree)
       const html = segmentProcessor.stringify(file)
