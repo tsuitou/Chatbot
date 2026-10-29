@@ -132,37 +132,39 @@
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useComposerStore } from '../stores/composer'
+import { useSessionStore } from '../stores/session'
 import { getFileTypeIcon } from '../utils/fileIcons'
 import { BlobUrlManager } from '../utils/blobUrlManager'
-const store = useChatStore()
+const store = useComposerStore()
+const session = useSessionStore()
 const fileInput = ref(null)
 const promptInput = ref(null)
 const dragCounter = ref(0)
 
 // --- Computed Properties ---
 const prompt = computed({
-  get: () => store.promptText,
+  get: () => store.prompt,
   set: (value) => {
     store.setPrompt(value)
   },
 })
 
-const toolSettings = computed(() => store.composerState.tools)
+const toolSettings = computed(() => store.tools)
 const writingFunctionCallEnabled = computed(
-  () => store.currentRequestConfig.parameters.writingFunctionCall === true
+  () => store.requestConfig.parameters.writingFunctionCall === true
 )
 const supportsTool = (toolName) => {
-  return store.currentToolDefinitions?.[toolName]?.enabled === true
+  return store.toolDefinitions?.[toolName]?.enabled === true
 }
 
-const attachments = computed(() => store.composerBucket.items)
+const attachments = computed(() => store.attachmentBucket.items)
 const supportsAttachments = computed(
-  () => store.currentModelCapabilities.attachments?.enabled === true
+  () => store.capabilities.attachments?.enabled === true
 )
-const isSending = computed(() => store.isGenerating)
+const isSending = computed(() => session.isGenerating)
 const connectionNotice = computed(() => {
-  switch (store.connectionStatus) {
+  switch (session.connectionStatus) {
     case 'connecting':
       return 'Connecting to the server…'
     case 'disconnected':
@@ -177,11 +179,11 @@ const isUploadingFiles = computed(() => {
 })
 // Stopping must stay possible; only starting a request needs the server.
 const isSendDisabled = computed(
-  () => !isSending.value && (isUploadingFiles.value || !store.isConnected)
+  () => !isSending.value && (isUploadingFiles.value || !session.isConnected)
 )
 const sendButtonTitle = computed(() => {
   if (isSending.value) return 'Stop'
-  if (!store.isConnected) return 'Send (not connected to the server)'
+  if (!session.isConnected) return 'Send (not connected to the server)'
   return 'Send'
 })
 
@@ -191,9 +193,9 @@ const isExpired = (file) => {
 }
 
 const unsupportedFileIds = computed(() => {
-  // Access store.currentModelCapabilities to establish dependency on active model policy
-  void store.currentModelCapabilities
-  const bucket = store.composerBucket
+  // Access store.capabilities to establish dependency on active model policy
+  void store.capabilities
+  const bucket = store.attachmentBucket
   if (!bucket) return new Set()
 
   const ids = new Set()
@@ -274,9 +276,9 @@ const toggleTool = (toolName) => {
 const handleSend = () => {
   if (isSendDisabled.value) return
   if (isSending.value) {
-    store.cancelGeneration()
+    session.cancelGeneration()
   } else {
-    store.sendMessage()
+    session.sendMessage()
   }
 }
 
@@ -378,13 +380,13 @@ const openFileInput = () => {
 const handleFileChange = (event) => {
   const files = event.target.files
   if (files && files.length > 0) {
-    store.composerBucket.addFiles(files)
+    store.attachmentBucket.addFiles(files)
   }
   event.target.value = '' // Reset input
 }
 
 const removeAttachment = (fileId) => {
-  store.composerBucket.remove(fileId)
+  store.attachmentBucket.remove(fileId)
 }
 
 // --- Drag and Drop ---
@@ -400,7 +402,7 @@ const onDrop = (event) => {
   dragCounter.value = 0
   const files = event.dataTransfer.files
   if (files && files.length > 0) {
-    store.composerBucket.addFiles(files)
+    store.attachmentBucket.addFiles(files)
   }
 }
 

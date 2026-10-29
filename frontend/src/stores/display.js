@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { watch } from 'vue'
-import { useChatStore } from './chat'
+import { useChatsStore } from './chats'
 import { parseModelResponse } from '../services/parser'
 import {
   buildDisplayIndicators,
@@ -50,13 +50,13 @@ export const useDisplayStore = defineStore('display', {
         this._stopWatcher()
       }
 
-      const chatStore = useChatStore()
-      let lastChatId = chatStore.activeChat?.id || null
+      const chatStore = useChatsStore()
+      let lastChatId = chatStore.activeChatId || null
 
       this._stopWatcher = watch(
-        [() => chatStore.activeChat?.id, () => chatStore.activeMessages],
+        [() => chatStore.activeChatId, () => chatStore.activeMessages],
         async () => {
-          const chatId = chatStore.activeChat?.id || null
+          const chatId = chatStore.activeChatId || null
           const chatChanged = chatId !== lastChatId
           lastChatId = chatId
           await this._syncFromMessages(chatStore.activeMessages || [], {
@@ -90,7 +90,7 @@ export const useDisplayStore = defineStore('display', {
       } else {
         this.ui.collapsedThoughts = nextState
       }
-      const chatStore = useChatStore()
+      const chatStore = useChatsStore()
       chatStore.updateMessageUiFlags(
         messageId,
         nextValue
@@ -124,7 +124,7 @@ export const useDisplayStore = defineStore('display', {
       if (!this._thoughtCache) this._thoughtCache = new Map()
       if (!this._groupCache) this._groupCache = new Map()
 
-      const chatStore = useChatStore()
+      const chatStore = useChatsStore()
 
       if (chatChanged) {
         this.ui.collapsedThoughts = {}

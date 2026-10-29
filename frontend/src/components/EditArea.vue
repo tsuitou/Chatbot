@@ -88,7 +88,8 @@
 
 <script setup>
 import { computed, ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useComposerStore } from '../stores/composer'
 import { getFileTypeIcon } from '../utils/fileIcons'
 import { BlobUrlManager } from '../utils/blobUrlManager'
 const props = defineProps({
@@ -100,7 +101,8 @@ const props = defineProps({
 
 const emit = defineEmits(['ready'])
 
-const store = useChatStore()
+const store = useChatsStore()
+const composer = useComposerStore()
 const fileInput = ref(null)
 const textInput = ref(null)
 const dragCounter = ref(0)
@@ -150,7 +152,7 @@ const scheduleHeightAdjustment = () => {
 
 // --- Computed Properties ---
 const text = computed({
-  get: () => store.editingState?.draftText ?? '',
+  get: () => store.editing?.draftText ?? '',
   set: (value) => {
     store.setEditingDraft(value)
   },
@@ -169,12 +171,12 @@ const getThumbnailUrl = (attachment) => {
 }
 
 onMounted(() => {
-  if (store.editingState?.messageId !== props.messageId) {
+  if (store.editing?.messageId !== props.messageId) {
     store.startEditing(props.messageId)
   }
 
   // Calculate initial height based on text content
-  const text = store.editingState?.draftText || ''
+  const text = store.editing?.draftText || ''
   const lines = Math.max(text.split('\n').length, 1)
   const lineHeight = 21
   const padding = 20
@@ -195,7 +197,7 @@ onMounted(() => {
 })
 
 watch(
-  () => store.editingState?.messageId,
+  () => store.editing?.messageId,
   () => {
     scheduleHeightAdjustment()
   }
@@ -372,8 +374,8 @@ const isExpired = (attachment) => {
 }
 
 const unsupportedFileIds = computed(() => {
-  // Access store.currentModelCapabilities to establish dependency on active model policy
-  void store.currentModelCapabilities
+  // Access composer.capabilities to establish dependency on active model policy
+  void composer.capabilities
   const bucket = store.editorBucket
   if (!bucket) return new Set()
 

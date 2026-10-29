@@ -267,7 +267,7 @@
 import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
 import { useChatConfigStore } from '../stores/chatConfig'
 import {
   createAttachmentBucket,
@@ -290,7 +290,7 @@ const props = defineProps({
 })
 
 const chatConfigStore = useChatConfigStore()
-const chatStore = useChatStore()
+const chatStore = useChatsStore()
 const isSaving = ref(false)
 
 const activeSettings = computed(() => chatConfigStore.activeSettings)

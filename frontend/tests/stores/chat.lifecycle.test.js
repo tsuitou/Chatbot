@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { toRaw } from 'vue'
-import { useChatStore } from '../../src/stores/chat'
+import { useChatsStore } from '../../src/stores/chats'
+import { useSessionStore } from '../../src/stores/session'
+import { useComposerStore } from '../../src/stores/composer'
 import * as apiAdapter from '../../src/services/apiAdapter'
 
 // Store actions run against a fake persistence boundary; every side effect
@@ -32,6 +34,8 @@ const { events, db, config } = vi.hoisted(() => {
       clearChatSettings: () => events.push('clear'),
       getResponseTransforms: () => [],
       getSystemPrompt: () => '',
+      prepareForNewChat: () => {},
+      loadAutoMessages: () => {},
     },
   }
 })
@@ -56,17 +60,18 @@ vi.mock('../../src/services/apiAdapter', async (importOriginal) => ({
 }))
 
 function setup() {
-  const store = useChatStore()
-  store.chatState.active = { meta: { id: 'a', title: 'Old' }, messages: [] }
-  store.chatState.list = [
+  const chats = useChatsStore()
+  const session = useSessionStore()
+  chats.active = { meta: { id: 'a', title: 'Old' }, messages: [] }
+  chats.list = [
     { id: 'a', title: 'Old' },
     { id: 'b', title: 'Other' },
   ]
-  store.prepareNewChat = async () => {
+  session.newChat = async () => {
     events.push('new')
-    store.chatState.active = null
+    chats.active = null
   }
-  return store
+  return { chats, session, composer: useComposerStore() }
 }
 
 function deferred() {
@@ -94,11 +99,11 @@ describe('chat metadata', () => {
       ...patch,
       lastModified: 123,
     }))
-    const store = setup()
-    await store.saveChatSettings('a', ' Renamed ')
-    expect(store.chatState.list[0].title).toBe('Renamed')
-    expect(store.chatState.active.meta.title).toBe('Renamed')
-    expect(store.chatState.list[0].lastModified).toBe(123)
+    const { chats } = setup()
+    await chats.saveChatSettings('a', ' Renamed ')
+    expect(chats.list[0].title).toBe('Renamed')
+    expect(chats.active.meta.title).toBe('Renamed')
+    expect(chats.list[0].lastModified).toBe(123)
     expect(events).toEqual(['settings', 'auto'])
   })
 
@@ -110,64 +115,62 @@ describe('chat metadata', () => {
       lastModified: 456,
       settings: {},
     }))
-    const store = setup()
-    await store.updateTitle('  Renamed  ')
+    const { chats } = setup()
+    await chats.updateTitle('  Renamed  ')
     expect(db.updateChatMetadata.mock.calls).toEqual([
       ['a', { title: 'Renamed' }],
     ])
-    expect(store.chatState.list[0].title).toBe('Renamed')
-    expect(store.chatState.list[0].lastModified).toBe(456)
-    expect(store.chatState.active.meta.title).toBe('Renamed')
-    expect(store.chatState.active.meta.lastModified).toBe(456)
-    expect('settings' in store.chatState.active.meta).toBe(false)
+    expect(chats.list[0].title).toBe('Renamed')
+    expect(chats.list[0].lastModified).toBe(456)
+    expect(chats.active.meta.title).toBe('Renamed')
+    expect(chats.active.meta.lastModified).toBe(456)
+    expect('settings' in chats.active.meta).toBe(false)
   })
 
   it('bookmarking keeps the chat position in history', async () => {
-    const store = setup()
-    store.chatState.list[1].lastModified = 1
-    await store.toggleBookmark('b')
+    const { chats } = setup()
+    chats.list[1].lastModified = 1
+    await chats.toggleBookmark('b')
     expect(db.updateChatMetadata.mock.calls).toEqual([
       ['b', { isBookmarked: true }, { touch: false }],
     ])
-    expect(store.chatState.list[1].isBookmarked).toBe(true)
-    expect(store.chatState.list[1].lastModified).toBe(1)
+    expect(chats.list[1].isBookmarked).toBe(true)
+    expect(chats.list[1].lastModified).toBe(1)
   })
 
   it('display-only flags persist without touching the chat', () => {
     const persisted = []
-    const store = setup()
-    store.chatState.active.messages = [{ id: 'm' }]
-    store._persistActiveMessage = async (message, options) => {
+    const { chats } = setup()
+    chats.active.messages = [{ id: 'm' }]
+    chats.persistActiveMessage = async (message, options) => {
       persisted.push({ flags: { ...message.uiFlags }, options })
     }
-    store.updateMessageUiFlags('m', { thoughtsCollapsed: false })
+    chats.updateMessageUiFlags('m', { thoughtsCollapsed: false })
     expect(persisted).toEqual([
       { flags: { thoughtsCollapsed: false }, options: { touchChat: false } },
     ])
-    expect(store.chatState.list[0].lastModified).toBeUndefined()
+    expect(chats.list[0].lastModified).toBeUndefined()
   })
 })
 
 describe('generation lifecycle', () => {
   it('a failed generation still refreshes the chat list position', async () => {
-    const store = setup()
-    store.chatState.active.messages = [
-      { id: 'm', requestId: 'r', status: 'streaming' },
-    ]
-    store.generationState = {
+    const { chats, session } = setup()
+    chats.active.messages = [{ id: 'm', requestId: 'r', status: 'streaming' }]
+    session.generationState = {
       status: 'streaming',
       stream: { chatId: 'a', requestId: 'r' },
     }
-    store._persistActiveMessage = async () => true
-    await store.handleStreamError({ chatId: 'a', requestId: 'r', error: 'x' })
-    expect(store.generationState.status).toBe('error')
-    expect(typeof store.chatState.list[0].lastModified).toBe('number')
+    chats.persistActiveMessage = async () => true
+    await session.handleStreamError({ chatId: 'a', requestId: 'r', error: 'x' })
+    expect(session.generationState.status).toBe('error')
+    expect(typeof chats.list[0].lastModified).toBe('number')
   })
 
   it('an in-flight completion cannot reset a newer generation', async () => {
     const saving = deferred()
-    const store = setup()
-    store.chatState.active.messages = [
+    const { chats, session } = setup()
+    chats.active.messages = [
       {
         id: 'm',
         requestId: 'r',
@@ -176,32 +179,32 @@ describe('generation lifecycle', () => {
         content: { text: 'done' },
       },
     ]
-    store.generationState = {
+    session.generationState = {
       status: 'streaming',
       stream: { chatId: 'a', requestId: 'r' },
     }
-    store._persistActiveMessage = () => saving.promise
-    const completing = store.handleStreamEnd({ chatId: 'a', requestId: 'r' })
+    chats.persistActiveMessage = () => saving.promise
+    const completing = session.handleStreamEnd({ chatId: 'a', requestId: 'r' })
     const nextStream = { chatId: 'b', requestId: 'next' }
-    store._setGenerationState('streaming', nextStream)
+    session._setGenerationState('streaming', nextStream)
     saving.resolve()
     await completing
-    expect(toRaw(store.generationState.stream)).toBe(nextStream)
-    expect(store.generationState.status).toBe('streaming')
+    expect(toRaw(session.generationState.stream)).toBe(nextStream)
+    expect(session.generationState.status).toBe('streaming')
   })
 
   it('late events after deletion do not modify a new chat', async () => {
-    const store = setup()
-    store.chatState.active = { meta: { id: 'b' }, messages: [] }
-    store.generationState = {
+    const { chats, session } = setup()
+    chats.active = { meta: { id: 'b' }, messages: [] }
+    session.generationState = {
       status: 'streaming',
       stream: { chatId: 'b', requestId: 'next' },
     }
     const oldEvent = { chatId: 'a', requestId: 'r' }
-    expect(await store.handleStreamChunk(oldEvent)).toBe(false)
-    await store.handleStreamEnd(oldEvent)
-    await store.handleStreamError(oldEvent)
-    expect(store.generationState.stream.requestId).toBe('next')
+    expect(await session.handleStreamChunk(oldEvent)).toBe(false)
+    await session.handleStreamEnd(oldEvent)
+    await session.handleStreamError(oldEvent)
+    expect(session.generationState.stream.requestId).toBe('next')
     expect(events).toEqual([])
   })
 
@@ -211,17 +214,17 @@ describe('generation lifecycle', () => {
       sent.push(messages)
       return {}
     })
-    const store = setup()
+    const { session, composer } = setup()
     const video = { id: 'v', mimeType: 'video/mp4' }
     const image = { id: 'i', mimeType: 'image/png' }
     const history = [
       { id: 'u', sender: 'user', attachments: [video, image] },
       { id: 'p', sender: 'user', attachments: [image] },
     ]
-    store.composerState.attachmentBucket = {
+    composer.attachmentBucket = {
       isUnsupported: (att) => att.mimeType === 'video/mp4',
     }
-    await store._executeGeneration({
+    await session._executeGeneration({
       chatId: 'a',
       requestMessages: history,
       modelMessage: { id: 'm', requestId: 'r' },
@@ -242,47 +245,47 @@ describe('chat deletion', () => {
     const navigation = deferred()
     db.deleteMessages.mockImplementation(async () => events.push('cancel'))
     db.deleteChat.mockImplementation(async () => events.push('delete'))
-    const store = setup()
-    store.generationState = {
+    const { chats, session } = setup()
+    session.generationState = {
       status: 'streaming',
       stream: { chatId: 'a', messageId: 'm', requestId: 'r' },
     }
-    store.prepareNewChat = async () => {
+    session.newChat = async () => {
       events.push('new')
       await navigation.promise
     }
-    const deleting = store.deleteChat('a')
+    const deleting = session.deleteChat('a')
     await flush()
-    expect(store.generationState.status).toBe('idle')
+    expect(session.generationState.status).toBe('idle')
     expect(events).toEqual(['cancel', 'delete', 'clear', 'new'])
-    expect(store.chatState.list.some((chat) => chat.id === 'a')).toBe(false)
-    expect(store.chatState.deletingIds).toContain('a')
+    expect(chats.list.some((chat) => chat.id === 'a')).toBe(false)
+    expect(chats.deletingIds).toContain('a')
     navigation.resolve()
     await deleting
-    expect(store.chatState.deletingIds).toHaveLength(0)
+    expect(chats.deletingIds).toHaveLength(0)
   })
 
   it('deleting another chat leaves the current generation untouched', async () => {
-    const store = setup()
+    const { chats, session } = setup()
     const stream = { chatId: 'a', requestId: 'r' }
-    store.generationState = { status: 'streaming', stream }
-    await store.deleteChat('b')
-    expect(toRaw(store.generationState.stream)).toBe(stream)
-    expect(store.chatState.active.meta.id).toBe('a')
+    session.generationState = { status: 'streaming', stream }
+    await session.deleteChat('b')
+    expect(toRaw(session.generationState.stream)).toBe(stream)
+    expect(chats.active.meta.id).toBe('a')
     expect(events).toEqual(['clear'])
   })
 
   it('failed deletion retains the chat without restarting generation', async () => {
     db.deleteChat.mockRejectedValue(new Error('storage failure'))
-    const store = setup()
-    store.generationState = {
+    const { chats, session } = setup()
+    session.generationState = {
       status: 'streaming',
       stream: { chatId: 'a', messageId: 'm' },
     }
-    await store.deleteChat('a')
-    expect(store.chatState.active.meta.id).toBe('a')
-    expect(store.chatState.list).toHaveLength(2)
-    expect(store.generationState.status).toBe('idle')
+    await session.deleteChat('a')
+    expect(chats.active.meta.id).toBe('a')
+    expect(chats.list).toHaveLength(2)
+    expect(session.generationState.status).toBe('idle')
     expect(events).toEqual(['error'])
   })
 })

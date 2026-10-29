@@ -6,14 +6,18 @@ import InputArea from './components/InputArea.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import DataManagementModal from './components/DataManagementModal.vue'
 import DebugPanel from './components/DebugPanel.vue'
-import { useChatStore } from './stores/chat'
+import { useSessionStore } from './stores/session'
+import { useModelsStore } from './stores/models'
+import { useComposerStore } from './stores/composer'
 import { useChatConfigStore } from './stores/chatConfig'
 import { getModels, getDefaultModel } from './services/api'
 import { connectSocket } from './services/socket'
 import { showErrorToast } from './services/notification'
 import { DEBUG_PANEL_ENABLED } from './services/env'
 
-const chatStore = useChatStore()
+const session = useSessionStore()
+const models = useModelsStore()
+const composer = useComposerStore()
 const chatConfigStore = useChatConfigStore()
 
 const isSettingsModalOpen = ref(false)
@@ -21,10 +25,10 @@ const isDataModalOpen = ref(false)
 const isDebugPanelEnabled = DEBUG_PANEL_ENABLED
 
 const handleBeforeUnload = () => {
-  if (chatStore.isGenerating) {
+  if (session.isGenerating) {
     // IndexedDB cleanup is best-effort during unload; any unfinished model
     // records are reconciled next time the chat is loaded or used.
-    void chatStore.cancelGeneration()
+    void session.cancelGeneration()
   }
 }
 
@@ -32,15 +36,15 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   connectSocket()
   try {
-    await chatStore.initializeApp()
+    await session.initialize()
     const availableModels = await getModels()
     if (!availableModels || availableModels.length === 0) {
       throw new Error('No available models found.')
     }
-    chatStore.setAvailableModels(availableModels)
+    models.setAvailableModels(availableModels)
     const preferredDefaultModel = await getDefaultModel()
-    const groups = chatStore.availableModels
-    const allModels = chatStore.allAvailableModels
+    const groups = models.availableModels
+    const allModels = models.allAvailableModels
     const firstRealGroup =
       groups.find((group) => group.provider !== 'virtual') || groups[0]
     const firstRealModel = firstRealGroup?.models?.[0] || allModels[0]
@@ -51,10 +55,11 @@ onMounted(async () => {
       groups.find((group) => group.models?.includes(defaultModel)) ||
       firstRealGroup
     const defaultProviderId = defaultGroup?.provider || null
-    chatStore.setDefaultModel(defaultModel, defaultProviderId)
-    await chatStore.selectModel(defaultModel, defaultProviderId)
+    models.setDefaultModel(defaultModel)
+    composer.applyDefaultModel(models.defaultModel, defaultProviderId)
+    await composer.selectModel(defaultModel, defaultProviderId)
     chatConfigStore.prepareForNewChat({
-      systemPrompt: chatStore.currentRequestConfig.systemInstruction || '',
+      systemPrompt: session.buildRequestConfig().systemInstruction || '',
     })
   } catch (error) {
     console.error('Failed to initialize app state:', error)

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useChatStore } from '../../src/stores/chat'
+import { useChatsStore } from '../../src/stores/chats'
+import { useSessionStore } from '../../src/stores/session'
+import { useComposerStore } from '../../src/stores/composer'
 import * as socket from '../../src/services/socket'
 import { STREAM_IDLE_TIMEOUT_MS } from '../../src/services/env'
 
@@ -38,16 +40,18 @@ vi.mock('../../src/services/apiAdapter', async (importOriginal) => ({
 const STREAMING_CONFIG = { model: 'm', providerId: 'gemini', streaming: true }
 
 function setup() {
-  const store = useChatStore()
-  store.chatState.active = { meta: { id: 'a', title: 'Chat' }, messages: [] }
-  store.chatState.list = [{ id: 'a', title: 'Chat' }]
-  store.setConnectionStatus('connected')
-  store._persistActiveMessage = async () => true
-  return store
+  const chats = useChatsStore()
+  const session = useSessionStore()
+  chats.active = { meta: { id: 'a', title: 'Chat' }, messages: [] }
+  chats.list = [{ id: 'a', title: 'Chat' }]
+  session.setConnectionStatus('connected')
+  chats.persistActiveMessage = async () => true
+  return { chats, session, composer: useComposerStore() }
 }
 
 // Puts the store in the state it is in right after a request was emitted.
-async function startStreaming(store, requestConfig = STREAMING_CONFIG) {
+async function startStreaming(requestConfig = STREAMING_CONFIG) {
+  const chats = useChatsStore()
   const modelMessage = {
     id: 'm',
     sender: 'model',
@@ -56,15 +60,15 @@ async function startStreaming(store, requestConfig = STREAMING_CONFIG) {
     createdAt: Date.now(),
     content: { text: '' },
   }
-  store.chatState.active.messages = [modelMessage]
-  await store._executeGeneration({
+  chats.active.messages = [modelMessage]
+  await useSessionStore()._executeGeneration({
     chatId: 'a',
     requestMessages: [],
     modelMessage,
     requestConfig,
   })
   expect(socket.startGeneration).toHaveBeenCalledOnce()
-  return store.chatState.active.messages[0]
+  return chats.active.messages[0]
 }
 
 const chunk = (deltaText) => ({ chatId: 'a', requestId: 'r', deltaText })
@@ -85,52 +89,52 @@ afterEach(() => {
 
 describe('connection status', () => {
   it('tracks status changes and ignores unknown values', () => {
-    const store = setup()
-    expect(store.isConnected).toBe(true)
-    store.setConnectionStatus('disconnected')
-    expect(store.connectionStatus).toBe('disconnected')
-    store.setConnectionStatus('bogus')
-    expect(store.connectionStatus).toBe('disconnected')
-    expect(store.isConnected).toBe(false)
+    const { session } = setup()
+    expect(session.isConnected).toBe(true)
+    session.setConnectionStatus('disconnected')
+    expect(session.connectionStatus).toBe('disconnected')
+    session.setConnectionStatus('bogus')
+    expect(session.connectionStatus).toBe('disconnected')
+    expect(session.isConnected).toBe(false)
   })
 })
 
 describe('disconnect during generation', () => {
   it('keeps the partial response and marks it as an error', async () => {
-    const store = setup()
-    const message = await startStreaming(store)
-    await store.handleStreamChunk(chunk('partial '))
-    await store.handleStreamChunk(chunk('answer'))
+    const { session } = setup()
+    const message = await startStreaming()
+    await session.handleStreamChunk(chunk('partial '))
+    await session.handleStreamChunk(chunk('answer'))
 
-    store.setConnectionStatus('disconnected')
-    await store.handleDisconnect()
+    session.setConnectionStatus('disconnected')
+    await session.handleDisconnect()
 
     expect(message.content.text).toBe('partial answer')
     expect(message.status).toBe('completed')
     expect(message.metadata.finishReason).toBe('error')
     expect(message.metadata.error).toMatch(/connection to the server was lost/i)
-    expect(store.generationState.status).toBe('error')
-    expect(store.isGenerating).toBe(false)
+    expect(session.generationState.status).toBe('error')
+    expect(session.isGenerating).toBe(false)
   })
 
   it('does nothing when no generation is running', async () => {
-    const store = setup()
-    await store.handleDisconnect()
-    expect(store.generationState.status).toBe('idle')
+    const { session } = setup()
+    await session.handleDisconnect()
+    expect(session.generationState.status).toBe('idle')
     expect(events).toEqual([])
   })
 })
 
 describe('stalled stream', () => {
   it('stops the request after a silent period; each chunk resets the timer', async () => {
-    const store = setup()
-    const message = await startStreaming(store)
+    const { session } = setup()
+    const message = await startStreaming()
 
     await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS - 1000)
-    await store.handleStreamChunk(chunk('still alive'))
+    await session.handleStreamChunk(chunk('still alive'))
     await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS - 1000)
     expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(store.isGenerating).toBe(true)
+    expect(session.isGenerating).toBe(true)
 
     await vi.advanceTimersByTimeAsync(1000)
     expect(socket.cancelBackendGeneration).toHaveBeenCalledWith({
@@ -139,24 +143,24 @@ describe('stalled stream', () => {
     })
     expect(message.content.text).toBe('still alive')
     expect(message.metadata.error).toMatch(/no response from the server/i)
-    expect(store.generationState.status).toBe('error')
+    expect(session.generationState.status).toBe('error')
   })
 
   it("ignores the backend's late aborted reply and chunks after the stall", async () => {
-    const store = setup()
+    const { chats, session } = setup()
     // Hold the error save open so the late events land while it is pending.
     let releaseSave
     const saving = new Promise((resolve) => {
       releaseSave = () => resolve(true)
     })
-    store._persistActiveMessage = () => saving
-    const message = await startStreaming(store)
-    await store.handleStreamChunk(chunk('kept'))
+    chats.persistActiveMessage = () => saving
+    const message = await startStreaming()
+    await session.handleStreamChunk(chunk('kept'))
     await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS)
-    expect(store.isGenerating).toBe(true)
+    expect(session.isGenerating).toBe(true)
 
-    expect(await store.handleStreamChunk(chunk(' late'))).toBe(false)
-    const ending = store.handleStreamEnd({
+    expect(await session.handleStreamChunk(chunk(' late'))).toBe(false)
+    const ending = session.handleStreamEnd({
       chatId: 'a',
       requestId: 'r',
       aborted: true,
@@ -169,51 +173,51 @@ describe('stalled stream', () => {
     expect(message.status).toBe('completed')
     expect(message.content.text).toBe('kept')
     expect(message.metadata.finishReason).toBe('error')
-    expect(store.generationState.status).toBe('error')
+    expect(session.generationState.status).toBe('error')
   })
 
   it.each([
     ['non-streaming requests', { ...STREAMING_CONFIG, streaming: false }],
     ['agent models', { ...STREAMING_CONFIG, providerId: 'virtual' }],
   ])('does not watch %s', async (_, requestConfig) => {
-    const store = setup()
-    await startStreaming(store, requestConfig)
+    const { session } = setup()
+    await startStreaming(requestConfig)
     await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS * 10)
     expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(store.isGenerating).toBe(true)
+    expect(session.isGenerating).toBe(true)
   })
 
   it('a normal completion clears the timer', async () => {
-    const store = setup()
-    await startStreaming(store)
-    await store.handleStreamEnd({ chatId: 'a', requestId: 'r' })
+    const { session } = setup()
+    await startStreaming()
+    await session.handleStreamEnd({ chatId: 'a', requestId: 'r' })
     await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS * 2)
     expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(store.generationState.status).toBe('idle')
+    expect(session.generationState.status).toBe('idle')
   })
 })
 
 describe('sending while disconnected', () => {
   it('refuses to send', async () => {
-    const store = setup()
-    store.setConnectionStatus('disconnected')
-    store.composerState.prompt = 'hello'
-    await store.sendMessage()
+    const { session, composer } = setup()
+    session.setConnectionStatus('disconnected')
+    composer.prompt = 'hello'
+    await session.sendMessage()
     expect(socket.startGeneration).not.toHaveBeenCalled()
-    expect(store.composerState.prompt).toBe('hello')
+    expect(composer.prompt).toBe('hello')
     expect(events).toEqual([expect.stringMatching(/not connected/i)])
   })
 
   it('refuses to resend before pruning any messages', async () => {
-    const store = setup()
-    store.chatState.active.messages = [
+    const { chats, session } = setup()
+    chats.active.messages = [
       { id: 'u', sender: 'user', sequence: 10, status: 'completed' },
       { id: 'm', sender: 'model', sequence: 20, status: 'completed' },
     ]
-    store.setConnectionStatus('disconnected')
-    await store.resendMessage('m')
+    session.setConnectionStatus('disconnected')
+    await session.resendMessage('m')
     expect(db.deleteMessages).not.toHaveBeenCalled()
-    expect(store.chatState.active.messages).toHaveLength(2)
+    expect(chats.active.messages).toHaveLength(2)
     expect(events).toEqual([expect.stringMatching(/not connected/i)])
   })
 })

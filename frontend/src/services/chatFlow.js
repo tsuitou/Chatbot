@@ -281,6 +281,62 @@ function prepareRequestMessages({
   return [...preAuto, ...history, ...postAuto]
 }
 
+// Sequences are spaced by 10 so auto messages can be slotted in between.
+const SEQUENCE_STEP = 10
+
+function sortBySequence(messages) {
+  return [...(messages || [])].sort(
+    (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)
+  )
+}
+
+function nextSequence(messages) {
+  if (!messages?.length) return SEQUENCE_STEP
+  return Math.max(...messages.map((m) => m.sequence ?? 0)) + SEQUENCE_STEP
+}
+
+// A new prompt goes after everything in the chat and its response right after.
+function planSend(messages) {
+  const userSequence = nextSequence(messages)
+  return {
+    userSequence,
+    anchorSequence: userSequence,
+    responseSequence: userSequence + SEQUENCE_STEP,
+  }
+}
+
+// Rerunning a model message replaces it (and everything after); rerunning a
+// user message keeps it and replaces everything after it.
+function planResend(messages, targetId) {
+  const sorted = sortBySequence(messages)
+  const index = sorted.findIndex((m) => m.id === targetId)
+  if (index === -1) return null
+  const target = sorted[index]
+  const replacesTarget = target.sender === 'model'
+  const cut = replacesTarget ? index : index + 1
+  const historyMessages = sorted.slice(0, cut)
+  const targetSequence = target.sequence ?? 0
+
+  const anchor = [...historyMessages]
+    .reverse()
+    .find((msg) => msg.sender === 'user')
+  let anchorSequence = targetSequence
+  if (anchor) {
+    anchorSequence = anchor.sequence ?? 0
+  } else if (historyMessages.length) {
+    anchorSequence = historyMessages.at(-1).sequence ?? targetSequence
+  }
+
+  return {
+    pruneIds: sorted.slice(cut).map((m) => m.id),
+    historyMessages,
+    anchorSequence,
+    responseSequence: replacesTarget
+      ? targetSequence
+      : nextSequence(historyMessages),
+  }
+}
+
 export {
   buildAutoMessageEntries,
   cloneConfigSnapshot,
@@ -289,11 +345,15 @@ export {
   createModelMessage,
   createUserMessage,
   isInvalidModelHistoryMessage,
+  nextSequence,
+  planResend,
+  planSend,
   prepareMessageForState,
   hydrateMessages,
   normalizeAttachments,
   prepareRequestMessages,
   syncContentRuntimeFromMessage,
   setContentStreamingState,
+  sortBySequence,
   ensureContentRuntime,
 }

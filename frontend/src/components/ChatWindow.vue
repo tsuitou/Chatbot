@@ -128,13 +128,15 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useSessionStore } from '../stores/session'
 import { useDisplayStore } from '../stores/display'
 import { showErrorToast, showSuccessToast } from '../services/notification'
 import Message from './Message.vue'
 import PreviewPanel from './PreviewPanel.vue'
 import ChatSettingsModal from './ChatSettingsModal.vue'
-const chatStore = useChatStore()
+const chatStore = useChatsStore()
+const session = useSessionStore()
 const displayStore = useDisplayStore()
 
 const messageList = ref(null)
@@ -146,7 +148,7 @@ const pendingChatAction = ref(null)
 
 const activeChat = computed(() => chatStore.activeChat)
 const isChatOpen = computed(() => chatStore.isChatOpen)
-const isGenerating = computed(() => chatStore.isGenerating)
+const isGenerating = computed(() => session.isGenerating)
 const messageGroups = computed(() => displayStore.messageGroups)
 const isPreviewOpen = computed(() => displayStore.isPreviewOpen)
 const scrollSignal = computed(() => chatStore.scrollSignal)
@@ -284,7 +286,7 @@ const duplicateChat = async () => {
   if (!chatId) return
   await runChatAction({
     action: 'duplicate',
-    execute: () => chatStore.duplicateChat(chatId),
+    execute: () => session.duplicateChat(chatId),
     successMessage: 'Chat duplicated successfully.',
     errorMessage: 'Failed to duplicate chat.',
   })
@@ -332,7 +334,7 @@ const handleDelete = (messageId) => {
 
 const handleResend = (messageId) => {
   if (!messageId) return
-  chatStore.resendMessage(messageId)
+  session.resendMessage(messageId)
 }
 </script>
 

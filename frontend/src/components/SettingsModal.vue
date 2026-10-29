@@ -224,7 +224,8 @@
 
 <script setup>
 import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useModelsStore } from '../stores/models'
+import { useComposerStore } from '../stores/composer'
 import { showSuccessToast } from '../services/notification'
 import * as db from '../services/db'
 import {
@@ -235,7 +236,8 @@ import {
 } from '../services/modelConfig'
 import { normalizeDynamicParameters } from '../services/modelCapabilities'
 const emit = defineEmits(['close'])
-const store = useChatStore()
+const store = useModelsStore()
+const composer = useComposerStore()
 
 const availableModels = computed(() => store.availableModels)
 const allModelSettings = ref({})
@@ -408,10 +410,10 @@ onMounted(async () => {
   const firstGroup =
     availableModels.value.find((group) => group.provider !== 'virtual') ||
     availableModels.value[0]
-  const modelToShow = store.composerState.model || firstGroup?.models?.[0] || ''
+  const modelToShow = composer.model || firstGroup?.models?.[0] || ''
   selectedModel.value = modelToShow
-  selectedProviderId.value = store.composerState.model
-    ? store.composerState.providerId
+  selectedProviderId.value = composer.model
+    ? composer.providerId
     : firstGroup?.provider || null
   loadSettingsForModel(modelToShow)
   fetchCapabilitiesForModel(modelToShow)

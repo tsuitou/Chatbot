@@ -93,9 +93,13 @@
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
 import * as db from '../services/db'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useModelsStore } from '../stores/models'
+import { useSessionStore } from '../stores/session'
 
-const chatStore = useChatStore()
+const chatStore = useChatsStore()
+const models = useModelsStore()
+const session = useSessionStore()
 const PAGE_SIZE = 50
 
 const storageEstimate = ref({ usage: null, quota: null })
@@ -235,11 +239,11 @@ async function getStorageEstimate() {
 
 // Records removed here bypass the chat store, so reload what it caches.
 const syncChatStore = async () => {
-  chatStore.setModelSettings(await db.getModelSettings())
+  models.setModelSettings(await db.getModelSettings())
   await chatStore.refreshChatList()
   const activeId = chatStore.activeChat?.id
   if (activeId && !chatStore.chatList.some((chat) => chat.id === activeId)) {
-    await chatStore.prepareNewChat()
+    await session.newChat()
   }
 }
 

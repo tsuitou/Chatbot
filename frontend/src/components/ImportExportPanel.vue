@@ -53,13 +53,17 @@
 import { ref } from 'vue'
 import * as dataManager from '../services/dataManager'
 import { showErrorToast, showSuccessToast } from '../services/notification'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useModelsStore } from '../stores/models'
+import { useSessionStore } from '../stores/session'
 
 const importFile = ref(null)
 const isImporting = ref(false)
 const importProgress = ref(0)
 const importStatusText = ref('')
-const chatStore = useChatStore()
+const chatStore = useChatsStore()
+const models = useModelsStore()
+const session = useSessionStore()
 
 const exportLabels = {
   all: 'all-data',
@@ -126,8 +130,8 @@ const handleFileSelected = async (event) => {
     await dataManager.importFromArchive(file, { onProgress })
 
     await chatStore.refreshChatList()
-    chatStore.setModelSettings(await dataManager.getModelSettings())
-    await chatStore.prepareNewChat()
+    models.setModelSettings(await dataManager.getModelSettings())
+    await session.newChat()
 
     importProgress.value = 100
     importStatusText.value = 'Import complete!'
@@ -156,9 +160,9 @@ const handleDeleteAll = async () => {
   ) {
     try {
       await dataManager.deleteAllData()
-      chatStore.setModelSettings({})
+      models.setModelSettings({})
       await chatStore.refreshChatList()
-      await chatStore.prepareNewChat()
+      await session.newChat()
       showSuccessToast('All data has been deleted.')
     } catch (error) {
       console.error('Failed to delete all data:', error)

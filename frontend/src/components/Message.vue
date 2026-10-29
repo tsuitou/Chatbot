@@ -177,7 +177,9 @@
 
 <script setup>
 import { computed, ref, onUnmounted, watch, onMounted } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useComposerStore } from '../stores/composer'
+import { useSessionStore } from '../stores/session'
 import { useDisplayStore } from '../stores/display'
 import CodeBlock from './CodeBlock.vue'
 import EditArea from './EditArea.vue'
@@ -190,7 +192,9 @@ const props = defineProps({
   },
 })
 
-const chatStore = useChatStore()
+const chatStore = useChatsStore()
+const composer = useComposerStore()
+const session = useSessionStore()
 const displayStore = useDisplayStore()
 
 const messageId = computed(() => props.group.id)
@@ -216,9 +220,9 @@ const messageTimestamp = computed(() => {
     return ''
   }
 })
-const actionsDisabled = computed(() => chatStore.isGenerating)
+const actionsDisabled = computed(() => session.isGenerating)
 const isEditing = computed(
-  () => chatStore.editingState?.messageId === messageId.value
+  () => chatStore.editing?.messageId === messageId.value
 )
 const editAreaReady = ref(false)
 
@@ -436,9 +440,9 @@ const isExpired = (attachment) => {
 }
 
 const unsupportedFileIds = computed(() => {
-  // Access currentModelCapabilities to register reactive dependency on active model
-  void chatStore.currentModelCapabilities
-  const bucket = chatStore.composerBucket
+  // Access capabilities to register reactive dependency on active model
+  void composer.capabilities
+  const bucket = composer.attachmentBucket
   if (!bucket) return new Set()
 
   const ids = new Set()

@@ -3,7 +3,7 @@ import { it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import SettingsModal from '../../src/components/SettingsModal.vue'
 
-const { db, store } = vi.hoisted(() => {
+const { db, store, composer } = vi.hoisted(() => {
   const capabilities = {
     parameters: {
       serviceTier: {
@@ -51,21 +51,24 @@ const { db, store } = vi.hoisted(() => {
       { provider: 'gemini', models: ['gemini-2.5-flash'] },
       { provider: 'openrouter', models: ['google/gemini-2.5-flash'] },
     ],
-    composerState: { model: 'gemini-2.5-flash', providerId: 'gemini' },
     ensureModelCapabilities: async () => capabilities,
     applied: null,
     setModelSettings: (value) => {
       store.applied = value
     },
   }
-  return { db, store }
+  const composer = { model: 'gemini-2.5-flash', providerId: 'gemini' }
+  return { db, store, composer }
 })
 
 vi.mock('../../src/services/db', () => ({
   getModelSettings: () => db.getModelSettings(),
   putModelSettings: (value) => db.putModelSettings(value),
 }))
-vi.mock('../../src/stores/chat', () => ({ useChatStore: () => store }))
+vi.mock('../../src/stores/models', () => ({ useModelsStore: () => store }))
+vi.mock('../../src/stores/composer', () => ({
+  useComposerStore: () => composer,
+}))
 vi.mock('../../src/services/notification', () => ({
   showSuccessToast: () => {},
 }))

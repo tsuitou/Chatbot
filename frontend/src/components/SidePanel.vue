@@ -124,15 +124,21 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { useChatStore } from '../stores/chat'
+import { useChatsStore } from '../stores/chats'
+import { useComposerStore } from '../stores/composer'
+import { useModelsStore } from '../stores/models'
+import { useSessionStore } from '../stores/session'
 const emit = defineEmits(['open-settings', 'open-data-modal'])
-const store = useChatStore()
+const chats = useChatsStore()
+const composer = useComposerStore()
+const models = useModelsStore()
+const session = useSessionStore()
 const searchQuery = ref('')
 
 // --- Computed properties ---
-const availableModels = computed(() => store.availableModels)
+const availableModels = computed(() => models.availableModels)
 const sortedChats = computed(() =>
-  [...store.chatList].sort(
+  [...chats.chatList].sort(
     (a, b) => (b.lastModified || 0) - (a.lastModified || 0)
   )
 )
@@ -150,14 +156,14 @@ const historyChats = computed(() =>
       c.title.toLowerCase().includes(searchQuery.value.toLowerCase())
   )
 )
-const activeChatId = computed(() => store.activeChat?.id)
+const activeChatId = computed(() => chats.activeChatId)
 
-const selectedModel = computed(() => store.composerState.model)
+const selectedModel = computed(() => composer.model)
 
 const streamingEnabled = computed({
-  get: () => store.composerState.streamingEnabled,
+  get: () => composer.streamingEnabled,
   set: (val) => {
-    store.setStreamingEnabled(val)
+    composer.setStreamingEnabled(val)
   },
 })
 
@@ -165,13 +171,13 @@ const streamingEnabled = computed({
 const onModelChange = async (event) => {
   const model = event.target.value
   const providerId = event.target.selectedOptions?.[0]?.dataset?.providerId
-  await store.selectModel(model, providerId || null)
+  await composer.selectModel(model, providerId || null)
 }
-const prepareNewChat = () => store.prepareNewChat()
-const loadChat = (chatId) => store.loadChat(chatId)
+const prepareNewChat = () => session.newChat()
+const loadChat = (chatId) => session.openChat(chatId)
 const deleteChat = (chatId) => {
   if (confirm('Are you sure you want to delete this chat?')) {
-    store.deleteChat(chatId)
+    session.deleteChat(chatId)
   }
 }
 </script>
