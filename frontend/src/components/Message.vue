@@ -246,7 +246,6 @@ const hasSystemContent = computed(() => {
   )
 })
 const shouldShowSystem = computed(() => {
-  if (!displayStore.ui.showSystemBubble) return false
   if (!props.group.system?.shouldRender) return false
   return hasSystemContent.value
 })

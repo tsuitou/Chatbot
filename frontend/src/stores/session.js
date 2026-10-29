@@ -55,6 +55,21 @@ function clearStreamWatchdog() {
   }
 }
 
+// Chunks can arrive far faster than is worth re-rendering, so they are
+// applied to the message in batches. Parsed chunks wait here (not reactive)
+// until the next flush.
+const STREAM_FLUSH_INTERVAL_MS = 50
+let pendingChunks = []
+let flushTimer = null
+
+function discardPendingChunks() {
+  pendingChunks = []
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+}
+
 function recordDebugRequest(payload) {
   if (!import.meta.env.DEV) return
   try {
@@ -173,6 +188,9 @@ export const useSessionStore = defineStore('session', {
 
     _setGenerationState(status, stream = null, error = null) {
       clearStreamWatchdog()
+      // End/error handlers flush before getting here; anything left belongs
+      // to a cancelled or superseded request.
+      discardPendingChunks()
       this.generationState = {
         status,
         stream,
@@ -192,8 +210,41 @@ export const useSessionStore = defineStore('session', {
 
       this._armStreamWatchdog()
 
-      const parsed = apiAdapter.parseApiResponse(rawChunk) || {}
+      // Parse now so a malformed chunk is still rejected in its ack.
+      pendingChunks.push({
+        requestId: stream.requestId,
+        parsed: apiAdapter.parseApiResponse(rawChunk) || {},
+      })
+      if (!flushTimer) {
+        flushTimer = setTimeout(() => {
+          flushTimer = null
+          this._flushStream()
+        }, STREAM_FLUSH_INTERVAL_MS)
+      }
+      return true
+    },
 
+    // Applies buffered chunks to the streaming message in one go.
+    _flushStream() {
+      if (flushTimer) {
+        clearTimeout(flushTimer)
+        flushTimer = null
+      }
+      if (!pendingChunks.length) return
+      const chunks = pendingChunks
+      pendingChunks = []
+      const stream = this.generationState.stream
+      const message =
+        this.isGenerating && stream
+          ? useChatsStore().findMessageByRequestId(stream.requestId)
+          : null
+      if (!message || message.status !== 'streaming') return
+      for (const { requestId, parsed } of chunks) {
+        if (requestId === stream.requestId) this._applyChunk(message, parsed)
+      }
+    },
+
+    _applyChunk(message, parsed) {
       const deltaText = parsed.deltaText ?? ''
 
       setContentStreamingState(message, true)
@@ -276,7 +327,6 @@ export const useSessionStore = defineStore('session', {
       syncContentRuntimeFromMessage(message)
 
       message.updatedAt = Date.now()
-      return true
     },
 
     async handleStreamEnd(result) {
@@ -288,6 +338,7 @@ export const useSessionStore = defineStore('session', {
       const message = chats.findMessageByRequestId(result.requestId)
       // Already finalized (e.g. by a disconnect or stall) — ignore late events.
       if (!message || message.status !== 'streaming') return
+      this._flushStream()
 
       if (result.aborted) {
         message.status = 'cancelled'
@@ -356,6 +407,7 @@ export const useSessionStore = defineStore('session', {
       if (!stream || stream.requestId !== rawError.requestId) return
       const message = chats.findMessageByRequestId(rawError.requestId)
       if (!message || message.status !== 'streaming') return
+      this._flushStream()
 
       message.status = 'completed'
       message.metadata = {

@@ -316,6 +316,9 @@ export const useChatsStore = defineStore('chats', {
       }
       if (!changed) return
       message.uiFlags = current
+      // A streaming message is saved when it finishes, flags included; saving
+      // it now would race the stream and store partial content.
+      if (message.status === 'streaming') return
       // Display-only state; don't let it reorder the chat list.
       void this.persistActiveMessage(message, { touchChat: false })
     },

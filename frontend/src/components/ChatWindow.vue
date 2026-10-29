@@ -127,7 +127,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useChatsStore } from '../stores/chats'
 import { useSessionStore } from '../stores/session'
 import { useDisplayStore } from '../stores/display'
@@ -208,9 +208,10 @@ watch(
   { immediate: true }
 )
 
-onMounted(() => {
-  displayStore.initializeWatcher()
-})
+watch(
+  () => chatStore.activeChatId,
+  () => displayStore.closePreview()
+)
 
 watch(scrollSignal, () => {
   nextTick(() => {

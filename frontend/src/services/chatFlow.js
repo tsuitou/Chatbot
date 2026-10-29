@@ -209,7 +209,9 @@ function createModelMessage({ sequence, requestId, configSnapshot }) {
     createdAt: ts,
     updatedAt: ts,
     attachments: [],
-    uiFlags: {},
+    // Shows the status/thoughts bubble for responses created in this app; saved
+    // with the message so it survives reloads.
+    uiFlags: { systemBubbleActive: true },
     runtime: createInitialRuntime({
       isStreamingContent: true,
       isStreamingThoughts: true,

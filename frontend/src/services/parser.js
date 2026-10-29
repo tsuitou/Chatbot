@@ -25,7 +25,13 @@ const parseProcessor = unified()
   .use(remarkBreaks)
   .use(remarkMath, { singleDollarTextMath: false })
 
+// Every plugin in the pipeline is synchronous, so rendering can happen inside
+// a computed; the async form remains for existing callers.
 export async function parseModelResponse(rawText) {
+  return parseModelResponseSync(rawText)
+}
+
+export function parseModelResponseSync(rawText) {
   if (!rawText) return []
   const {
     text: latexNormalizedText,
@@ -39,10 +45,10 @@ export async function parseModelResponse(rawText) {
   injectPlaceholderMath(tree, blockPlaceholders, inline)
   let nonCodeNodesBuffer = []
 
-  const processNonCodeNodes = async () => {
+  const processNonCodeNodes = () => {
     if (nonCodeNodesBuffer.length > 0) {
       const segmentTree = { type: 'root', children: nonCodeNodesBuffer }
-      const file = await segmentProcessor.run(segmentTree)
+      const file = segmentProcessor.runSync(segmentTree)
       const html = segmentProcessor.stringify(file)
 
       segments.push({
@@ -55,7 +61,7 @@ export async function parseModelResponse(rawText) {
 
   for (const node of tree.children) {
     if (node.type === 'code') {
-      await processNonCodeNodes()
+      processNonCodeNodes()
       const id = String(node.lang ?? '')
         .trim()
         .replace(/^\{?\.?(language-|lang-)/, '')
@@ -80,7 +86,7 @@ export async function parseModelResponse(rawText) {
     }
   }
 
-  await processNonCodeNodes()
+  processNonCodeNodes()
   return segments
 }
 
@@ -259,4 +265,68 @@ function createInlineMathNode(value) {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+// Mirrors splitTrailingFence: "text```" also opens or closes a fence.
+const TRAILING_FENCE = /^.+?\S(`{3,}|~{3,})[ \t]*$/
+// A line that would continue the previous block rather than start a new one:
+// indented content, list items and block quotes.
+const CONTINUATION_LINE = /^(\s|[-*+](\s|$)|\d+[.)](\s|$)|>)/
+
+const countOf = (line, token) => line.split(token).length - 1
+
+// Returns the end of the longest prefix of `text` (starting at `from`, which
+// must itself be such a boundary) that ends at a blank line outside any code
+// fence or display math and is followed by a new top-level block. That prefix
+// renders the same however the rest of the text turns out, so it can be
+// parsed once while a response streams in.
+export function findStableBoundary(text, from = 0) {
+  let boundary = from
+  let fence = null
+  let dollarPairs = 0
+  let brackets = 0
+  let environments = 0
+  let offset = from
+  const lines = text.slice(from).split('\n')
+
+  // The last line may still be arriving, so it is never inspected.
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i]
+    offset += line.length + 1
+
+    const fenceMatch = line.match(FENCE_LINE) || line.match(TRAILING_FENCE)
+    if (fence) {
+      const marker = fenceMatch?.[1]
+      const closes =
+        marker &&
+        marker[0] === fence[0] &&
+        marker.length >= fence.length &&
+        !(fenceMatch[2] || '').trim()
+      if (closes) fence = null
+      continue
+    }
+    if (fenceMatch) {
+      fence = fenceMatch[1]
+      continue
+    }
+
+    dollarPairs += countOf(line, '$$')
+    brackets += countOf(line, '\\[') - countOf(line, '\\]')
+    environments += countOf(line, '\\begin{') - countOf(line, '\\end{')
+
+    const next = lines[i + 1]
+    if (
+      line.trim() === '' &&
+      dollarPairs % 2 === 0 &&
+      brackets <= 0 &&
+      environments <= 0 &&
+      i + 1 < lines.length - 1 &&
+      next.trim() !== '' &&
+      !CONTINUATION_LINE.test(next)
+    ) {
+      boundary = offset
+    }
+  }
+  return boundary
 }
