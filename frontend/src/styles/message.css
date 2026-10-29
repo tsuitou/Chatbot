@@ -1313,22 +1313,12 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    color 0.15s ease;
+  transition: color 0.15s ease;
 }
 
 .message-wrapper .thought-stream-header.disabled {
   cursor: default;
   pointer-events: none;
-}
-
-.message-wrapper .thought-stream-header.disabled:hover {
-  background: none;
-}
-
-.message-wrapper .thought-stream-header:hover {
-  background-color: var(--bg-hover);
 }
 
 .message-wrapper .thought-stream-header:focus-visible {
