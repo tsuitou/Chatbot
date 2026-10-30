@@ -1,0 +1,74 @@
+# Builds the browser-only (PWA) app and publishes it to GitHub Pages.
+# Enable it once under Settings -> Pages -> Source: "GitHub Actions".
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'backend/providers/**'
+      - 'backend/capabilities/**'
+      - 'backend/runtime.js'
+      - 'backend/specialModels.js'
+      - 'backend/systemInstruction.js'
+      - 'backend/.env'
+      - 'backend/system_instruction.txt'
+      - 'backend/package.json'
+      - 'backend/pnpm-lock.yaml'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            backend/pnpm-lock.yaml
+      # The PWA bundles the provider code in backend/, which resolves the
+      # provider SDKs from backend/node_modules.
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pnpm install --frozen-lockfile --prod
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        working-directory: frontend
+        run: pnpm test
+      - name: Build
+        working-directory: frontend
+        env:
+          PWA_BASE: /${{ github.event.repository.name }}/
+        run: pnpm run build:pwa
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist-pwa
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

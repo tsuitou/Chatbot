@@ -55,6 +55,14 @@ Run the following command in your terminal:
    ```
 3. Open your browser and go to `http://localhost:15101/chatbot` to use the application.
 
+## Browser-only Version (PWA)
+The same app also runs without the server: the provider code runs in the browser and calls each API directly with your own keys. It is published to GitHub Pages and can be installed as an app.
+
+- Open **Data Management → Configuration** to set API keys (stored only in this browser, never exported), the settings from `.env` (`DEFAULT_MODEL`, `GEMINI_MODEL_FILTER`, `CLAUDE_MODEL_FILTER`, `SYSTEM_INSTRUCTION_MODE`, `OPENROUTER_MODELS`, `OPENROUTER_APP_TITLE`), `system_instruction.txt` and `openai-endpoints.json`. Blank fields and unedited files follow the defaults shipped with each build; edited files are kept until you press **Reset to Default**, and a notice appears when the default has changed since.
+- The page is served over HTTPS, so browsers block OpenAI-compatible servers on plain HTTP (except usually `http://localhost`). The server must also allow cross-origin requests.
+- Data is stored per site, so chats from the server version do not carry over; move them with Export / Import.
+- Build it locally with `pnpm run build:pwa` in `frontend` (output: `frontend/dist-pwa`, base path `/Chatbot/`, override with `PWA_BASE`). `.github/workflows/pages.yml` deploys it on pushes to `main`; enable it under Settings → Pages → Source: GitHub Actions.
+
 ## Note on Data Management
 The application uses the browser's IndexedDB to store data. Please be aware that data may be deleted due to browser settings or storage cleanup operations.
 
@@ -161,6 +169,14 @@ Gemini向けのチャットボットフロントエンドです。自分が欲�
    node server.js
    ```
 3. ブラウザで `http://localhost:15101/chatbot` にアクセスするとアプリケーションを利用できます。
+
+## ブラウザ版（PWA）
+サーバーなしでも同じアプリを利用できます。プロバイダの処理はブラウザ内で動作し、各APIへ自分のキーで直接リクエストします。GitHub Pages で公開しており、アプリとしてインストールすることもできます。
+
+- **Data Management → Configuration** で、APIキー（このブラウザにのみ保存され、エクスポートには含まれません）、`.env` 相当の設定（`DEFAULT_MODEL`、`GEMINI_MODEL_FILTER`、`CLAUDE_MODEL_FILTER`、`SYSTEM_INSTRUCTION_MODE`、`OPENROUTER_MODELS`、`OPENROUTER_APP_TITLE`）、`system_instruction.txt`、`openai-endpoints.json` を設定します。空欄の項目や編集していないファイルは、ビルドに含まれるデフォルトに従います。編集したファイルは **Reset to Default** を押すまで保持され、その後デフォルトが更新された場合は通知が表示されます。
+- ページは HTTPS で配信されるため、HTTP の OpenAI 互換サーバーにはブラウザが接続を許可しません（`http://localhost` は通常許可されます）。また、サーバー側でクロスオリジンのリクエストを許可する必要があります。
+- データはサイトごとに保存されるため、サーバー版のチャットは引き継がれません。エクスポート／インポートで移してください。
+- ローカルでは `frontend` で `pnpm run build:pwa` を実行するとビルドできます（出力先: `frontend/dist-pwa`、ベースパス: `/Chatbot/`、`PWA_BASE` で変更可能）。`.github/workflows/pages.yml` が `main` への push 時にデプロイします。リポジトリの Settings → Pages → Source で「GitHub Actions」を選択して有効にしてください。
 
 ## データ管理に関する注意
 アプリケーションはブラウザの IndexedDB を利用してデータを保存します。ブラウザの設定やストレージのクリーンアップ操作によってデータが削除される可能性がある点に注意してください。
