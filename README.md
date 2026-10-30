@@ -73,8 +73,7 @@ including Gemini through OpenRouter:
   `Writing FC: Used`, with failure labels when needed. Save and Reset use the
   existing model-specific settings.
 
-Run the mocked provider, settings, history and cancellation tests with
-`node --test backend/tests/*.test.mjs frontend/tests/*.test.mjs` from the source root.
+Run the frontend tests (Vitest) with `pnpm test` in the `frontend` directory.
 
 ## Regarding Behavior
 * The system prompt saved in the model settings on the frontend is applied as a chat-specific setting when a new chat is created. Within a chat, the chat-specific system prompt is always used.
