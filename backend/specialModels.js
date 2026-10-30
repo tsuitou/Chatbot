@@ -15,10 +15,8 @@ const SPECIAL_MODEL_DEFINITIONS = [
       tools: {},
       attachments: { enabled: true, allowRemoteUpload: false, allowedMimes: null, maxInlineFileSize: 10485760 },
     },
-    async handle(socket, data) {
-      const { chatId, requestId } = data
-      socket.emit('chunk', { chatId, requestId, provider: 'virtual', deltaText: '' })
-      socket.emit('end_generation', { ok: true, chatId, requestId, finishReason: 'stop' })
+    async *generate({ chatId, requestId }) {
+      yield { chatId, requestId, provider: 'virtual', deltaText: '', finishReason: 'stop' }
     },
   },
 ]
@@ -42,11 +40,12 @@ export function createSpecialRegistry({ providerKeys }) {
       return byName.get(name)?.capabilities ?? null
     },
 
-    async handle(name, socket, data, runtimeContext = {}) {
+    // Yields the response chunks for a special model request.
+    generate(name, data) {
       const model = byName.get(name)
       if (!model) throw new Error(`Unknown special model: ${name}`)
       if (!model.isAvailable(ctx)) throw new Error(`Model "${name}" is not available`)
-      await model.handle(socket, data, { ...ctx, ...runtimeContext })
+      return model.generate(data)
     },
   }
 }

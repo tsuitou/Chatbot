@@ -1,10 +1,7 @@
 import { GoogleGenAI } from '@google/genai'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   buildModelCapabilities,
   getEffectiveCapabilities,
-  loadCapabilities,
 } from './capabilities.js'
 import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts } from './events.js'
@@ -24,22 +21,15 @@ import {
   resolveSystemInstruction,
 } from '../systemInstruction.js'
 
-const runtimeFilename = fileURLToPath(import.meta.url)
-const runtimeDirname = path.dirname(runtimeFilename)
-
 export class GeminiProvider {
   constructor(apiKey, systemInstruction, options = {}) {
-    const { capabilitiesPath, systemInstructionMode } = options
+    const { capabilities, systemInstructionMode } = options
     this.genAI = new GoogleGenAI({ apiKey })
     this.defaultSystemInstruction = systemInstruction
     this.systemInstructionMode = normalizeSystemInstructionMode(
       systemInstructionMode
     )
-    this.capabilities = loadCapabilities(
-      'gemini',
-      capabilitiesPath,
-      runtimeDirname
-    )
+    this.capabilities = capabilities || null
     this.label = this.capabilities?.label ?? 'Gemini'
     this.modelDetailsCache = new Map()
     this.supportsStreamAbort = true
@@ -225,9 +215,10 @@ export class GeminiProvider {
     })
   }
 
-  async uploadFile(path, mimeType, displayName) {
+  // `source` is a path on the server and a Blob in the browser.
+  async uploadFile(source, mimeType, displayName) {
       const uploaded = await this.genAI.files.upload({
-          file: path,
+          file: source,
           config: { mimeType, displayName },
       });
       

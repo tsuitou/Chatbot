@@ -9,15 +9,7 @@ import readline from 'readline'
 import os from 'os'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
-import { GeminiProvider } from './providers/gemini.js'
-import { ClaudeProvider } from './providers/claude.js'
-import { OpenRouterProvider } from './providers/openrouter.js'
-import {
-  OpenAICompatProvider,
-  loadOpenAICompatEndpoints,
-} from './providers/openaiCompat.js'
-import { createProviderRegistry } from './providers/registry.js'
-import { createSpecialRegistry } from './specialModels.js'
+import { createRuntime } from './runtime.js'
 import { makeResolveFirstExisting } from './utils.js'
 import { normalizeSystemInstructionMode } from './systemInstruction.js'
 
@@ -109,24 +101,10 @@ function reloadConfig() {
 
 function applyReloadedConfig() {
   reloadConfig()
-  geminiProvider?.setDefaultSystemInstruction(
+  runtime.setDefaultSystemInstruction(
     defaultSystemInstruction,
     systemInstructionMode
   )
-  claudeProvider?.setDefaultSystemInstruction(
-    defaultSystemInstruction,
-    systemInstructionMode
-  )
-  openrouterProvider?.setDefaultSystemInstruction(
-    defaultSystemInstruction,
-    systemInstructionMode
-  )
-  for (const entry of openaiCompatEntries) {
-    entry.provider.setDefaultSystemInstruction(
-      defaultSystemInstruction,
-      systemInstructionMode
-    )
-  }
 }
 
 // --- Init ---
@@ -266,88 +244,60 @@ if (
   console.warn('======================================================================\n')
 }
 
-// Per-provider model list filters. Providers with curated lists (openrouter
-// allowlist, openai-compat config) are never filtered.
-const parseFilterKeywords = (raw) =>
-  (raw || '')
-    .split(',')
-    .map((keyword) => keyword.trim().toLowerCase())
-    .filter(Boolean)
-const providerModelFilters = {
-  gemini: parseFilterKeywords(process.env.GEMINI_MODEL_FILTER),
-  claude: parseFilterKeywords(process.env.CLAUDE_MODEL_FILTER),
-}
 const connectionInfo = {}
 
-// Initialize Provider
-const geminiCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'gemini.json'), 'file')
-const claudeCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'claude.json'), 'file')
-const openrouterCapabilitiesPath = resolveFirstExisting(path.join('capabilities', 'openrouter.json'), 'file')
-const geminiProvider = providerKeys.gemini
-  ? new GeminiProvider(providerKeys.gemini, defaultSystemInstruction, {
-      capabilitiesPath: geminiCapabilitiesPath,
-      systemInstructionMode,
-    })
-  : null
-const claudeProvider = providerKeys.claude
-  ? new ClaudeProvider(providerKeys.claude, defaultSystemInstruction, {
-      capabilitiesPath: claudeCapabilitiesPath,
-      systemInstructionMode,
-    })
-  : null
-const openrouterProvider = providerKeys.openrouter
-  ? new OpenRouterProvider(providerKeys.openrouter, defaultSystemInstruction, {
-      capabilitiesPath: openrouterCapabilitiesPath,
-      systemInstructionMode,
-      appUrl: process.env.OPENROUTER_APP_URL,
-      appTitle: process.env.OPENROUTER_APP_TITLE,
-      models: process.env.OPENROUTER_MODELS,
-    })
-  : null
+function loadCapabilities(providerId) {
+  const capPath = resolveFirstExisting(path.join('capabilities', `${providerId}.json`), 'file')
+  if (!capPath) {
+    console.warn(`No capabilities file found for ${providerId}.`)
+    return null
+  }
+  try {
+    return JSON.parse(fs.readFileSync(capPath, 'utf-8'))
+  } catch (error) {
+    console.warn(`Failed to load capabilities from ${capPath}:`, error)
+    return null
+  }
+}
 
 // OpenAI-compatible endpoints (vLLM etc.): OPENAI_COMPAT_CONFIG points to a
 // JSON file describing one endpoint or an array of them.
-function resolveOpenAICompatConfigPath() {
+function loadOpenAICompatConfig() {
   const raw = (process.env.OPENAI_COMPAT_CONFIG || '').trim()
   if (!raw) return null
-  if (path.isAbsolute(raw)) return raw
-  return resolveFirstExisting(raw, 'file') || path.resolve(process.cwd(), raw)
-}
-const openaiCompatCapabilitiesPath = resolveFirstExisting(
-  path.join('capabilities', 'openai-compat.json'),
-  'file'
-)
-const openaiCompatEntries = loadOpenAICompatEndpoints(
-  resolveOpenAICompatConfigPath()
-).map((endpoint, index) => {
-  const id =
-    endpoint.id || (index === 0 ? 'openai-compat' : `openai-compat-${index + 1}`)
-  return {
-    id,
-    provider: new OpenAICompatProvider(endpoint, defaultSystemInstruction, {
-      capabilitiesPath: openaiCompatCapabilitiesPath,
-      systemInstructionMode,
-      providerId: id,
-    }),
-    modelPrefixes: [],
+  const configPath = path.isAbsolute(raw)
+    ? raw
+    : resolveFirstExisting(raw, 'file') || path.resolve(process.cwd(), raw)
+  try {
+    return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+  } catch (error) {
+    console.warn(`Failed to load OpenAI-compatible config from ${configPath}:`, error.message)
+    return null
   }
+}
+
+const runtime = createRuntime({
+  keys: providerKeys,
+  settings: {
+    geminiModelFilter: process.env.GEMINI_MODEL_FILTER,
+    claudeModelFilter: process.env.CLAUDE_MODEL_FILTER,
+    defaultModel: process.env.DEFAULT_MODEL,
+    systemInstructionMode,
+    openrouterModels: process.env.OPENROUTER_MODELS,
+    openrouterAppUrl: process.env.OPENROUTER_APP_URL,
+    openrouterAppTitle: process.env.OPENROUTER_APP_TITLE,
+  },
+  capabilities: Object.fromEntries(
+    ['gemini', 'claude', 'openrouter', 'openai-compat'].map((id) => [id, loadCapabilities(id)])
+  ),
+  openaiCompatConfig: loadOpenAICompatConfig(),
+  defaultSystemInstruction,
 })
-if (openaiCompatEntries.length) {
+if (runtime.openaiCompatIds.length) {
   console.log(
-    `Registered ${openaiCompatEntries.length} OpenAI-compatible endpoint(s): ${openaiCompatEntries
-      .map((e) => e.id)
-      .join(', ')}`
+    `Registered ${runtime.openaiCompatIds.length} OpenAI-compatible endpoint(s): ${runtime.openaiCompatIds.join(', ')}`
   )
 }
-
-const providerRegistry = createProviderRegistry([
-  { id: 'gemini', provider: geminiProvider },
-  { id: 'claude', provider: claudeProvider, modelPrefixes: ['claude-'] },
-  { id: 'openrouter', provider: openrouterProvider, modelPrefixes: [] },
-  ...openaiCompatEntries,
-])
-
-const specialRegistry = createSpecialRegistry({ providerKeys })
 
 // Ensure uploads dir exists for Multer temp files. In packaged (SEA) builds the
 // runtime dir may be read-only, so fall back to the OS temp dir.
@@ -378,22 +328,6 @@ const upload = multer({
 })
 
 // --- Helpers ---
-const normalizeModelName = (name) => (name || '').replace(/^models\//, '')
-const resolveProviderId = (modelName, hint) =>
-  providerRegistry.resolveProviderId(modelName, hint) || 'gemini'
-
-function isMimeAllowedByPolicy(mimeType, allowedMimes) {
-  if (!allowedMimes) return true
-  const list = Array.isArray(allowedMimes) ? allowedMimes : []
-  if (list.includes(mimeType)) return true
-  return list.some(
-    (pattern) =>
-      typeof pattern === 'string' &&
-      pattern.endsWith('/*') &&
-      mimeType.startsWith(pattern.slice(0, -1))
-  )
-}
-
 function cleanupUploadedFile(file) {
   try {
     if (file?.path) fs.unlinkSync(file.path)
@@ -418,15 +352,6 @@ function handleUploadMiddleware(req, res, next) {
       error: 'Upload failed',
       message: error?.message || 'Upload failed.',
     })
-  })
-}
-const filterModelNames = (providerId, names = []) => {
-  const list = Array.isArray(names) ? names : []
-  const keywords = providerModelFilters[providerId] || []
-  if (!keywords.length) return list
-  return list.filter((name) => {
-    const normalized = String(name || '').toLowerCase()
-    return keywords.some((keyword) => normalized.includes(keyword))
   })
 }
 const numberOr = (v, fallback) => {
@@ -481,19 +406,7 @@ app.get(`${BASE_PATH}/healthz`, (_req, res) => res.json({ ok: true }))
 // List models
 apiRouter.get('/models', async (_req, res) => {
   try {
-    const groups = [
-      { provider: 'virtual', label: specialRegistry.label, models: specialRegistry.list() },
-    ]
-
-    for (const group of providerRegistry.groups()) {
-      groups.push({
-        provider: group.provider,
-        label: group.label,
-        models: filterModelNames(group.provider, await group.models),
-      })
-    }
-
-    res.json(groups.filter(group => group.models.length > 0))
+    res.json(await runtime.listModelGroups())
   } catch (error) {
     console.error('models list error:', error?.status, error?.message)
     res.status(500).json({ error: 'Failed to fetch models', message: error?.message })
@@ -503,12 +416,8 @@ apiRouter.get('/models', async (_req, res) => {
 // Get default model name (plain text). Prefer .env DEFAULT_MODEL
 apiRouter.get('/models/default', async (_req, res) => {
   try {
-    const configured = process.env.DEFAULT_MODEL
-    if (configured) {
-      return res.type('text/plain').send(normalizeModelName(configured))
-    }
-    // Fallback empty if none found
-    return res.type('text/plain').send('')
+    // Empty if none is configured
+    return res.type('text/plain').send(runtime.defaultModel())
   } catch (error) {
     console.error('default-model error:', error?.status, error?.message)
     return res.status(500).type('text/plain').send('')
@@ -517,21 +426,11 @@ apiRouter.get('/models/default', async (_req, res) => {
 
 apiRouter.get(/^\/models\/(.+)\/capabilities$/, async (req, res) => {
   try {
-    const modelName = req.params[0]
-    const normalized = normalizeModelName(modelName)
-    if (specialRegistry.isSpecial(normalized)) {
-      return res.json(specialRegistry.capabilities(normalized))
-    }
-
-    const providerId = resolveProviderId(modelName, req.query.provider)
-    const capabilities = await providerRegistry
-      .get(providerId)
-      ?.getModelCapabilities(modelName)
-    if (!capabilities) {
-      return res.status(404).json({ error: 'Provider not available', message: 'Provider not available for model.' })
-    }
-    res.json(capabilities)
+    res.json(await runtime.getModelCapabilities(req.params[0], req.query.provider))
   } catch (error) {
+    if (error?.status === 404) {
+      return res.status(404).json({ error: 'Provider not available', message: error.message })
+    }
     console.error('capabilities error:', error?.status, error?.message)
     res.status(500).json({ error: 'Failed to get model capabilities', message: error?.message })
   }
@@ -542,60 +441,28 @@ apiRouter.post('/files/upload', handleUploadMiddleware, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.', message: 'No file uploaded.' })
 
   try {
-    const modelName = normalizeModelName(req.query.model)
-    if (!modelName) {
-      cleanupUploadedFile(req.file)
-      return res.status(400).json({
-        error: 'Model required',
-        message: 'Model is required for file upload.',
-      })
-    }
-    const providerId = resolveProviderId(modelName, req.query.provider)
-    const providerInstance = providerRegistry.get(providerId)
-    if (!providerInstance) {
-      cleanupUploadedFile(req.file)
-      return res.status(404).json({
-        error: 'Provider not available',
-        message: 'Provider not available for file upload.',
-        provider: providerId,
-        model: modelName,
-      })
-    }
-    if (typeof providerInstance.uploadFile !== 'function') {
-      cleanupUploadedFile(req.file)
-      return res.status(400).json({
-        error: 'File upload unsupported',
-        message: 'File upload is not supported for this model.',
-        provider: providerId,
-        model: modelName,
-      })
-    }
-    const capabilities =
-      typeof providerInstance.getModelCapabilities === 'function'
-        ? await providerInstance.getModelCapabilities(modelName)
-        : null
-    const attachmentPolicy = capabilities?.attachments || {}
-    if (
-      attachmentPolicy.enabled !== true ||
-      attachmentPolicy.allowRemoteUpload !== true ||
-      !isMimeAllowedByPolicy(req.file.mimetype, attachmentPolicy.allowedMimes)
-    ) {
-      cleanupUploadedFile(req.file)
-      return res.status(400).json({
-        error: 'File upload unsupported',
-        message: 'File upload is not supported for this model or file type.',
-        provider: providerId,
-        model: modelName,
-      })
-    }
-    const file = await providerInstance.uploadFile(req.file.path, req.file.mimetype, req.file.originalname);
-    cleanupUploadedFile(req.file)
+    const file = await runtime.uploadFile(req.file.path, {
+      mimeType: req.file.mimetype,
+      displayName: req.file.originalname,
+      model: req.query.model,
+      provider: req.query.provider,
+    })
     res.json(file)
   } catch (error) {
-    console.error('upload error:', error?.status, error?.message)
-    cleanupUploadedFile(req.file)
     const status = numberOr(error?.status, 500)
-    res.status(status).json({ error: 'Failed to process file', message: error?.message })
+    if (status >= 500) console.error('upload error:', error?.status, error?.message)
+    res.status(status).json({
+      error:
+        status === 404
+          ? 'Provider not available'
+          : status >= 500
+            ? 'Failed to process file'
+            : 'File upload unsupported',
+      message: error?.message,
+      ...(error?.provider ? { provider: error.provider, model: error.model } : {}),
+    })
+  } finally {
+    cleanupUploadedFile(req.file)
   }
 })
 
@@ -633,18 +500,7 @@ io.on('connection', (socket) => {
   })
 
   socket.on('start_generation', async (data) => {
-    const {
-      provider,
-      messages,
-      model: modelName,
-      parameters,
-      routing,
-      tools,
-      systemInstruction,
-      streaming,
-      chatId,
-      requestId,
-    } = data ?? {}
+    const { chatId, requestId } = data ?? {}
 
     abortGeneration(activeGeneration, 'superseded')
     let generation = null
@@ -657,67 +513,31 @@ io.on('connection', (socket) => {
     updateConnectionInfo(socket.id, 'generating')
     console.log(connectionInfo)
     try {
-      if (!modelName) throw new Error('model is required')
-      
-      const normalizedModel = normalizeModelName(modelName)
-      const providerId = resolveProviderId(normalizedModel, provider)
-
-      if (specialRegistry.isSpecial(normalizedModel)) {
-        await specialRegistry.handle(normalizedModel, socket, data, {
-          defaultSystemInstruction,
-          systemInstructionMode,
-        })
-        return
-      }
-
-      const providerInstance = providerRegistry.get(providerId)
-      if (!providerInstance) throw new Error(`${providerId || 'Requested'} provider is not configured`)
-      if (!Array.isArray(messages)) throw new Error('messages must be an array')
-      const controller =
-        providerInstance.supportsAbort || (streaming && providerInstance.supportsStreamAbort)
-          ? new AbortController() : null
+      const job = runtime.prepareGeneration(data)
+      const controller = job.abortable ? new AbortController() : null
       activeGeneration = generation = {
         chatId,
         requestId,
-        provider: providerId,
+        provider: job.providerId,
         controller,
         abortReason: null,
       }
-      const request = {
-        provider: providerId,
-        chatId,
-        requestId,
-        model: modelName,
-        messages,
-        parameters: parameters || {},
-        routing: routing || {},
-        tools: tools || {},
-        systemInstruction: systemInstruction || '',
-        ...(controller ? { signal: controller.signal } : {}),
-      }
-      if (streaming) {
-        const stream = providerInstance.generateStream(request);
-        for await (const chunk of stream) {
-          if (controller) {
-            try {
-              await emitWithAck(socket, 'chunk', chunk)
-            } catch (error) {
-              abortGeneration(generation, 'chunk_ack_timeout')
-              const err = new Error('Frontend did not acknowledge streamed output.')
-              err.status = 499
-              err.cause = error
-              throw err
-            }
-          } else {
-            socket.emit('chunk', chunk)
+      for await (const chunk of job.run(controller?.signal)) {
+        if (controller) {
+          try {
+            await emitWithAck(socket, 'chunk', chunk)
+          } catch (error) {
+            abortGeneration(generation, 'chunk_ack_timeout')
+            const err = new Error('Frontend did not acknowledge streamed output.')
+            err.status = 499
+            err.cause = error
+            throw err
           }
+        } else {
+          socket.emit('chunk', chunk)
         }
-        socket.emit('end_generation', { ok: true, chatId, requestId })
-      } else {
-        const response = await providerInstance.generate(request);
-        socket.emit('chunk', response)
-        socket.emit('end_generation', { ok: true, chatId, requestId })
       }
+      socket.emit('end_generation', { ok: true, chatId, requestId })
     } catch (error) {
       if (generation?.controller?.signal.aborted) {
         socket.emit('end_generation', {

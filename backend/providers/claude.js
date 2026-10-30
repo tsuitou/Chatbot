@@ -1,13 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   applyCapabilityModelOverride,
   buildModelCapabilitiesFromEffective,
   findCapabilityModelOverride,
   getDefaultCapabilities,
-  loadCapabilities,
 } from './capabilities.js'
+import { decodeBase64Text } from './base64.js'
 import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts } from './events.js'
 import { mergeText } from './request.js'
@@ -15,9 +13,6 @@ import {
   normalizeSystemInstructionMode,
   resolveSystemInstruction,
 } from '../systemInstruction.js'
-
-const runtimeFilename = fileURLToPath(import.meta.url)
-const runtimeDirname = path.dirname(runtimeFilename)
 
 // Anthropic requires thinking.budget_tokens >= 1024 and max_tokens strictly
 // greater than the budget. CLAUDE_DEFAULT_MAX_TOKENS only applies when a model
@@ -245,12 +240,12 @@ function normalizeClaudeUsage(u) {
 
 export class ClaudeProvider {
   constructor(apiKey, systemInstruction, options = {}) {
-    const { capabilitiesPath, systemInstructionMode } = options
-    this.anthropic = new Anthropic({ apiKey })
+    const { capabilities, systemInstructionMode, clientOptions } = options
+    this.anthropic = new Anthropic({ apiKey, ...clientOptions })
     this.defaultSystemInstruction = systemInstruction
     this.systemInstructionMode =
       normalizeSystemInstructionMode(systemInstructionMode)
-    this.capabilities = loadCapabilities('claude', capabilitiesPath, runtimeDirname)
+    this.capabilities = capabilities || null
     this.label = this.capabilities?.label ?? 'Claude'
     this.metadataTtlMs = MODELS_CACHE_TTL_MS
     this._modelsCache = null
@@ -309,7 +304,7 @@ export class ClaudeProvider {
         source: {
           type: 'text',
           media_type: 'text/plain',
-          data: Buffer.from(part.data, 'base64').toString('utf-8'),
+          data: decodeBase64Text(part.data),
         },
       }
     }

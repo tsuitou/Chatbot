@@ -1,31 +1,3 @@
-import fs from 'fs'
-import path from 'path'
-
-export function loadCapabilities(providerId, explicitPath, runtimeDirname) {
-  const filename = `${providerId}.json`
-  const candidates = [
-    explicitPath,
-    path.resolve(process.cwd(), 'backend/capabilities', filename),
-    path.resolve(process.cwd(), 'capabilities', filename),
-    runtimeDirname
-      ? path.resolve(runtimeDirname, '../capabilities', filename)
-      : null,
-  ].filter(Boolean)
-
-  for (const capPath of candidates) {
-    try {
-      if (fs.existsSync(capPath)) {
-        return JSON.parse(fs.readFileSync(capPath, 'utf-8'))
-      }
-    } catch (error) {
-      console.warn(`Failed to load capabilities from ${capPath}:`, error)
-    }
-  }
-
-  console.warn(`No capabilities file found for ${providerId}.`)
-  return null
-}
-
 // Selects the most specific model entry whose `modelQuery` is a substring of
 // the model name. Specificity = explicit `priority` first, then longest query,
 // so authoring order in the JSON is irrelevant: `2.5-flash-lite` beats

@@ -1,7 +1,4 @@
 import OpenAI from 'openai'
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   applyCapabilityModelOverride,
   buildModelCapabilitiesFromEffective,
@@ -9,8 +6,8 @@ import {
   findCapabilityModelOverride,
   getDefaultCapabilities,
   getEffectiveCapabilities,
-  loadCapabilities,
 } from './capabilities.js'
+import { decodeBase64Text } from './base64.js'
 import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts } from './events.js'
 import { mergeText } from './request.js'
@@ -19,17 +16,15 @@ import {
   resolveSystemInstruction,
 } from '../systemInstruction.js'
 
-const runtimeFilename = fileURLToPath(import.meta.url)
-const runtimeDirname = path.dirname(runtimeFilename)
-
 const MODELS_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-// Loads and normalizes the endpoint config file referenced by
-// OPENAI_COMPAT_CONFIG. Accepts a single endpoint object or an array of them:
+// Normalizes the parsed endpoint config (the server's OPENAI_COMPAT_CONFIG
+// file, or the browser app's settings). Accepts a single endpoint object or an
+// array of them:
 //   {
 //     "label": "vLLM (Local)",
 //     "baseUrl": "http://localhost:8000/v1",
@@ -40,17 +35,8 @@ function isPlainObject(value) {
 //   }
 // `request` is deep-merged into every chat completion body, so server-specific
 // extensions (vLLM chat_template_kwargs etc.) pass through untouched.
-export function loadOpenAICompatEndpoints(configPath) {
-  if (!configPath) return []
-
-  let parsed
-  try {
-    parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-  } catch (error) {
-    console.warn(`Failed to load OpenAI-compatible config from ${configPath}:`, error.message)
-    return []
-  }
-
+export function normalizeOpenAICompatEndpoints(parsed) {
+  if (parsed === null || parsed === undefined) return []
   const entries = Array.isArray(parsed) ? parsed : [parsed]
   const endpoints = []
   entries.forEach((entry, index) => {
@@ -92,16 +78,17 @@ function normalizeUsage(u) {
 
 export class OpenAICompatProvider {
   constructor(endpoint, systemInstruction, options = {}) {
-    const { capabilitiesPath, systemInstructionMode, providerId } = options
+    const { capabilities, systemInstructionMode, providerId, clientOptions } = options
     this.providerId = providerId || 'openai-compat'
     this.client = new OpenAI({
       apiKey: endpoint.apiKey,
       baseURL: endpoint.baseUrl,
       defaultHeaders: endpoint.headers,
+      ...clientOptions,
     })
     this.defaultSystemInstruction = systemInstruction
     this.systemInstructionMode = normalizeSystemInstructionMode(systemInstructionMode)
-    this.capabilities = loadCapabilities('openai-compat', capabilitiesPath, runtimeDirname)
+    this.capabilities = capabilities || null
     this.label = endpoint.label || this.capabilities?.label || 'OpenAI Compatible'
     this.allowlist = endpoint.models
     this.requestOverrides = endpoint.request
@@ -144,13 +131,7 @@ export class OpenAICompatProvider {
       }
     }
     if (mimeType.startsWith('text/')) {
-      let text = ''
-      try {
-        text = Buffer.from(part.data, 'base64').toString('utf-8')
-      } catch {
-        text = ''
-      }
-      return { type: 'text', text }
+      return { type: 'text', text: decodeBase64Text(part.data) }
     }
     // Generic OpenAI-compatible servers have no document block type; skip.
     return null

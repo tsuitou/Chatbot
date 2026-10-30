@@ -1,14 +1,12 @@
 import OpenAI from 'openai'
-import path from 'path'
-import { fileURLToPath } from 'url'
 import {
   applyCapabilityModelOverride,
   buildModelCapabilitiesFromEffective,
   findCapabilityModelOverride,
   getDefaultCapabilities,
   getEffectiveCapabilities,
-  loadCapabilities,
 } from './capabilities.js'
+import { decodeBase64Text } from './base64.js'
 import { buildProviderConfig } from './configBuilder.js'
 import { eventFromParts } from './events.js'
 import { mergeText } from './request.js'
@@ -26,9 +24,6 @@ import {
   normalizeSystemInstructionMode,
   resolveSystemInstruction,
 } from '../systemInstruction.js'
-
-const runtimeFilename = fileURLToPath(import.meta.url)
-const runtimeDirname = path.dirname(runtimeFilename)
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 const OPENROUTER_ORIGIN = 'https://openrouter.ai'
@@ -374,11 +369,12 @@ function applyRoutingCapabilities(base, options) {
 export class OpenRouterProvider {
   constructor(apiKey, systemInstruction, options = {}) {
     const {
-      capabilitiesPath,
+      capabilities,
       systemInstructionMode,
       appUrl,
       appTitle,
       models,
+      clientOptions,
     } = options
     this.client = new OpenAI({
       apiKey,
@@ -387,16 +383,13 @@ export class OpenRouterProvider {
         ...(appUrl ? { 'HTTP-Referer': appUrl } : {}),
         ...(appTitle ? { 'X-OpenRouter-Title': appTitle } : {}),
       },
+      ...clientOptions,
     })
     this.defaultSystemInstruction = systemInstruction
     this.systemInstructionMode = normalizeSystemInstructionMode(
       systemInstructionMode
     )
-    this.capabilities = loadCapabilities(
-      'openrouter',
-      capabilitiesPath,
-      runtimeDirname
-    )
+    this.capabilities = capabilities || null
     this.label = this.capabilities?.label ?? 'OpenRouter'
     this.allowlist = String(models || '')
       .split(',')
@@ -478,13 +471,7 @@ export class OpenRouterProvider {
       }
     }
     if (mimeType.startsWith('text/')) {
-      let text = ''
-      try {
-        text = Buffer.from(part.data, 'base64').toString('utf-8')
-      } catch {
-        text = ''
-      }
-      return { type: 'text', text }
+      return { type: 'text', text: decodeBase64Text(part.data) }
     }
     // Unsupported MIME -> skip rather than crash.
     return null
