@@ -19,6 +19,7 @@ describe('local config', () => {
       defaultSettingValue('claudeModelFilter')
     )
     expect(resolved.settings.openrouterModels).toBe('a/b')
+    expect(resolved.settings).toHaveProperty('openrouterAppUrl')
     expect(resolved.defaultSystemInstruction).toBe(
       defaultFileText('systemInstruction')
     )
