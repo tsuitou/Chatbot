@@ -15,13 +15,58 @@ const BACKEND_RELEASE_EXCLUDES = [
   'bundle.mjs',
   'build-sea.mjs',
   'sea-config.json',
+  'uploads',
 ]
 
+const git = (...args) =>
+  execFileSync('git', args, { cwd: __dirname, encoding: 'utf8' }).trim()
+
+// --publish releases what is on origin/main, so the zip never picks up
+// uncommitted or unpushed changes.
+function assertPublishable(tag) {
+  if (git('branch', '--show-current') !== 'main') {
+    throw new Error('Publish from the main branch.')
+  }
+  if (git('status', '--porcelain')) {
+    throw new Error('The working tree has uncommitted changes.')
+  }
+  git('fetch', 'origin', 'main')
+  if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) {
+    throw new Error('main is not in sync with origin/main.')
+  }
+  if (git('tag', '--list', tag)) {
+    throw new Error(`Tag ${tag} already exists.`)
+  }
+}
+
+function publish(tag, zipPath) {
+  git('tag', tag)
+  git('push', 'origin', tag)
+  execFileSync(
+    'gh',
+    [
+      'release',
+      'create',
+      tag,
+      zipPath,
+      '--title',
+      `Release ${tag}`,
+      '--generate-notes',
+      '--verify-tag',
+    ],
+    { cwd: __dirname, stdio: 'inherit' }
+  )
+  console.log(`Published ${tag}`)
+}
+
 async function main() {
-  const version = process.argv[2]
+  const args = process.argv.slice(2)
+  const shouldPublish = args.includes('--publish')
+  const version = args.find((arg) => !arg.startsWith('--'))
   if (!version) {
-    console.error('Usage: node release.mjs <version>')
+    console.error('Usage: node release.mjs <version> [--publish]')
     console.error('Example: node release.mjs 0.1.2')
+    console.error('  --publish  also tag the release and create it on GitHub')
     process.exit(1)
   }
   if (!/^[0-9A-Za-z._-]+$/.test(version)) {
@@ -34,6 +79,8 @@ async function main() {
   console.log(`Creating release v${version}...`)
 
   try {
+    if (shouldPublish) assertPublishable(`v${version}`)
+
     const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
     const releaseName = `chatbot_v${version}`
     const zipName = `${releaseName}.zip`
@@ -117,6 +164,8 @@ async function main() {
 
     console.log(`Release ${zipName} created successfully!`)
     console.log(`Location: ${path.join(releaseDir, zipName)}`)
+
+    if (shouldPublish) publish(`v${version}`, path.join(releaseDir, zipName))
   } catch (error) {
     console.error('Release failed:', error.message)
     process.exit(1)
