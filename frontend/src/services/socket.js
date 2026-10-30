@@ -33,8 +33,8 @@ const socket = io(resolveSocketUrl(), {
  * @typedef {object} SocketHandlers
  * @property {(chunk: import('../types').StreamChunk) => boolean | void | Promise<boolean | void>} onChunk
  *   Resolve to false to report the chunk as ignored in its ack.
- * @property {(result: { chatId: string, requestId: string, aborted?: boolean, reason?: string, finishReason?: string }) => void} onEnd
- * @property {(error: { chatId?: string, requestId?: string, error?: string, message?: string, metadata?: object }) => void} onError
+ * @property {(result: { ok?: boolean, chatId: string, requestId: string, aborted?: boolean, reason?: string, finishReason?: string }) => void} onEnd
+ * @property {(error: { chatId?: string, requestId?: string, error?: string, message?: string, status?: number, metadata?: object }) => void} onError
  * @property {(reason: string) => void} onDisconnect
  * @property {(status: ConnectionStatus) => void} onConnectionChange
  */

@@ -5,7 +5,7 @@ import eslintConfigPrettier from 'eslint-config-prettier'
 import prettierRecommended from 'eslint-plugin-prettier/recommended'
 
 export default [
-  { ignores: ['dist', 'coverage'] },
+  { ignores: ['dist', 'dist-pwa', 'coverage'] },
   js.configs.recommended,
   ...eslintPluginVue.configs['flat/recommended'],
   {
@@ -16,6 +16,19 @@ export default [
     },
     rules: {
       'vue/multi-word-component-names': 'off',
+    },
+  },
+  {
+    files: ['src/**/*.js'],
+    languageOptions: {
+      // Build-time constant injected by vite.config.js.
+      globals: { __LOCAL_DEFAULTS__: 'readonly' },
+    },
+  },
+  {
+    files: ['vite.config.js', 'build/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
     },
   },
   {

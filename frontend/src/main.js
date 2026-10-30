@@ -8,6 +8,7 @@ import './style.css'
 import App from './App.vue'
 import './icons'
 import { applyThemePreference, getThemePreference } from './services/theme'
+import { setupPwa } from './services/pwa'
 
 // Before mounting, so the first paint already has the chosen theme.
 applyThemePreference(getThemePreference())
@@ -35,3 +36,4 @@ app.use(Toast, {
   newestOnTop: true,
 })
 app.mount('#app')
+setupPwa()

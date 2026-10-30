@@ -23,6 +23,14 @@
         <div class="modal-section">
           <div class="tabs">
             <button
+              v-if="IS_LOCAL_MODE"
+              class="tab-button"
+              :class="{ active: activeTab === 'configuration' }"
+              @click="activeTab = 'configuration'"
+            >
+              Configuration
+            </button>
+            <button
               class="tab-button"
               :class="{ active: activeTab === 'importExport' }"
               @click="activeTab = 'importExport'"
@@ -38,6 +46,7 @@
             </button>
           </div>
           <div class="tab-content">
+            <ConfigurationPanel v-if="activeTab === 'configuration'" />
             <ImportExportPanel v-if="activeTab === 'importExport'" />
             <StorageInspector v-if="activeTab === 'inspector'" />
           </div>
@@ -53,8 +62,11 @@ import IconButton from './IconButton.vue'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import ImportExportPanel from './ImportExportPanel.vue'
 import StorageInspector from './StorageInspector.vue'
+import ConfigurationPanel from './ConfigurationPanel.vue'
+import { IS_LOCAL_MODE } from '../services/env'
 const emit = defineEmits(['close'])
-const activeTab = ref('importExport') // Default tab
+// The browser-only build has no server config, so its settings live here.
+const activeTab = ref(IS_LOCAL_MODE ? 'configuration' : 'importExport')
 
 const isOverlayMouseDown = ref(false)
 const shouldCancelOverlayClose = ref(false)

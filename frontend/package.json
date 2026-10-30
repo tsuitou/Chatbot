@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:pwa": "vite --mode pwa",
     "build": "vite build",
+    "build:pwa": "vite build --mode pwa",
     "preview": "vite preview",
     "lint": "eslint . --ext .vue,.js --fix",
     "lint:check": "eslint . --ext .vue,.js",

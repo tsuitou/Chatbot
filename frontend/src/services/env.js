@@ -30,6 +30,9 @@ const parseByteSize = (value, fallback) => {
   return Math.floor(amount * multipliers[unit])
 }
 
+// The browser-only (PWA) build: no backend, providers run in the page.
+export const IS_LOCAL_MODE = import.meta.env.VITE_BACKEND === 'local'
+
 export const DEBUG_PANEL_ENABLED = (() => {
   const configured = toBoolean(import.meta.env.VITE_ENABLE_DEBUG_PANEL)
   if (configured != null) {

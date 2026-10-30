@@ -17,6 +17,7 @@
     "src/services/**/*.js",
     "src/stores/**/*.js",
     "src/composables/**/*.js",
-    "src/env.d.ts"
+    "src/env.d.ts",
+    "src/backend.d.ts"
   ]
 }

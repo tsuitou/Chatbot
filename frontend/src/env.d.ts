@@ -15,4 +15,11 @@ interface ImportMetaEnv {
   readonly VITE_ENABLE_DEBUG_PANEL?: string
   readonly VITE_MAX_UPLOAD_FILE_SIZE?: string
   readonly VITE_STREAM_IDLE_TIMEOUT?: string
+  readonly VITE_BACKEND?: 'local'
+}
+
+// Server defaults baked into the browser-only build; see vite.config.js.
+declare const __LOCAL_DEFAULTS__: {
+  settings: Record<string, string>
+  systemInstruction: string
 }
