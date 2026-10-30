@@ -43,8 +43,8 @@ function isMimeAllowedByPolicy(mimeType, allowedMimes) {
  * @param {object} options
  * @param {{ gemini?: string, claude?: string, openrouter?: string }} [options.keys]
  * @param {object} [options.settings] geminiModelFilter, claudeModelFilter,
- *   defaultModel, systemInstructionMode, openrouterModels, openrouterAppUrl,
- *   openrouterAppTitle (raw strings, as in the server's .env).
+ *   defaultModel, systemInstructionMode, openrouterModels (raw strings, as in
+ *   the server's .env).
  * @param {Record<string, object>} [options.capabilities] Parsed capability
  *   JSON keyed by provider: gemini, claude, openrouter, openai-compat.
  * @param {unknown} [options.openaiCompatConfig] Parsed endpoint config.
@@ -81,8 +81,6 @@ export function createRuntime({
     ? new OpenRouterProvider(keys.openrouter, defaultSystemInstruction, {
         ...common,
         capabilities: capabilities.openrouter,
-        appUrl: settings.openrouterAppUrl,
-        appTitle: settings.openrouterAppTitle,
         models: settings.openrouterModels,
       })
     : null

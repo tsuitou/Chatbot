@@ -368,21 +368,11 @@ function applyRoutingCapabilities(base, options) {
 
 export class OpenRouterProvider {
   constructor(apiKey, systemInstruction, options = {}) {
-    const {
-      capabilities,
-      systemInstructionMode,
-      appUrl,
-      appTitle,
-      models,
-      clientOptions,
-    } = options
+    const { capabilities, systemInstructionMode, models, clientOptions } =
+      options
     this.client = new OpenAI({
       apiKey,
       baseURL: OPENROUTER_BASE_URL,
-      defaultHeaders: {
-        ...(appUrl ? { 'HTTP-Referer': appUrl } : {}),
-        ...(appTitle ? { 'X-OpenRouter-Title': appTitle } : {}),
-      },
       ...clientOptions,
     })
     this.defaultSystemInstruction = systemInstruction

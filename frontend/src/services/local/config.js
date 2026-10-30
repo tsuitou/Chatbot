@@ -63,16 +63,6 @@ export const SETTING_FIELDS = [
     name: 'OPENROUTER_MODELS',
     hint: 'Comma-separated OpenRouter model IDs to list.',
   },
-  {
-    key: 'openrouterAppUrl',
-    name: 'OPENROUTER_APP_URL',
-    hint: 'App URL sent to OpenRouter for attribution (HTTP-Referer).',
-  },
-  {
-    key: 'openrouterAppTitle',
-    name: 'OPENROUTER_APP_TITLE',
-    hint: 'App name sent to OpenRouter for attribution.',
-  },
 ]
 
 export const ENDPOINTS_EXAMPLE = `[

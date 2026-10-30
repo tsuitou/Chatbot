@@ -38,8 +38,6 @@ function readLocalDefaults() {
       claudeModelFilter: env.CLAUDE_MODEL_FILTER || '',
       systemInstructionMode: env.SYSTEM_INSTRUCTION_MODE || '',
       openrouterModels: env.OPENROUTER_MODELS || '',
-      openrouterAppUrl: env.OPENROUTER_APP_URL || '',
-      openrouterAppTitle: env.OPENROUTER_APP_TITLE || '',
     },
     systemInstruction: readBackendFile('system_instruction.txt'),
   }

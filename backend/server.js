@@ -284,8 +284,6 @@ const runtime = createRuntime({
     defaultModel: process.env.DEFAULT_MODEL,
     systemInstructionMode,
     openrouterModels: process.env.OPENROUTER_MODELS,
-    openrouterAppUrl: process.env.OPENROUTER_APP_URL,
-    openrouterAppTitle: process.env.OPENROUTER_APP_TITLE,
   },
   capabilities: Object.fromEntries(
     ['gemini', 'claude', 'openrouter', 'openai-compat'].map((id) => [id, loadCapabilities(id)])
