@@ -37,6 +37,7 @@ const serviceWorker = (
 ) => `const CACHE = ${JSON.stringify(cacheName)}
 const ASSETS = ${JSON.stringify(assets)}
 const INDEX = new URL('index.html', self.location).href
+const ROOT = new URL('./', self.location).href
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)))
@@ -65,9 +66,18 @@ self.addEventListener('fetch', (event) => {
   const { request } = event
   if (request.method !== 'GET') return
   if (new URL(request.url).origin !== self.location.origin) return
-  const lookup = request.mode === 'navigate' ? INDEX : request
+  // DevTools re-requests the page this way on reload; fetch() rejects it.
+  if (request.cache === 'only-if-cached' && request.mode !== 'same-origin') {
+    return
+  }
+  const lookup =
+    request.mode === 'navigate' || request.url === ROOT ? INDEX : request
   event.respondWith(
-    caches.match(lookup).then((cached) => cached || fetch(request))
+    caches
+      .match(lookup)
+      // A failed request (offline, aborted by a reload) stays a plain
+      // network error instead of an uncaught rejection in the worker.
+      .then((cached) => cached || fetch(request).catch(() => Response.error()))
   )
 })
 `
