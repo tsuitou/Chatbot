@@ -1,7 +1,3 @@
-import { runAgentSession } from './agent/runner.js'
-
-const AGENT_BASE_MODEL = 'gemini-3.8-flash'
-
 const VIRTUAL_CAPABILITIES_BASE = {
   provider: 'virtual',
   label: 'Special',
@@ -23,38 +19,6 @@ const SPECIAL_MODEL_DEFINITIONS = [
       const { chatId, requestId } = data
       socket.emit('chunk', { chatId, requestId, provider: 'virtual', deltaText: '' })
       socket.emit('end_generation', { ok: true, chatId, requestId, finishReason: 'stop' })
-    },
-  },
-  {
-    name: 'agent-deep-research',
-    isAvailable: ({ providerKeys }) => !!providerKeys.gemini,
-    capabilities: {
-      ...VIRTUAL_CAPABILITIES_BASE,
-      model: 'agent-deep-research',
-      features: { systemInstruction: true },
-      tools: {},
-      attachments: { enabled: false },
-    },
-    async handle(socket, data, { providerKeys, defaultSystemInstruction, systemInstructionMode }) {
-      const { messages, systemInstruction, chatId, requestId } = data
-      if (!providerKeys.gemini) throw new Error('Gemini API key is required for agent models')
-      if (!Array.isArray(messages)) throw new Error('messages must be an array')
-      await runAgentSession({
-        apiKey: providerKeys.gemini,
-        baseModel: AGENT_BASE_MODEL,
-        defaultSystemInstruction,
-        systemInstructionMode,
-        userSystemInstruction: systemInstruction,
-        contents: messages.map((message) => ({
-          role: message.role,
-          parts: (message.parts || [])
-            .filter((part) => part?.type === 'text')
-            .map((part) => ({ text: part.text || '' })),
-        })),
-        socket,
-        chatId,
-        requestId,
-      })
     },
   },
 ]
