@@ -77,7 +77,7 @@
   },
   "models": [
     {
-      "modelQuery": "gemini-4-argon",
+      "modelQuery": "gemini-4-",
       "parameters": {
         "temperature": null,
         "topP": null,

@@ -8,7 +8,6 @@ import {
   cancelBackendGeneration,
 } from '../services/socket'
 import { showErrorToast, showWarningToast } from '../services/notification'
-import { STREAM_IDLE_TIMEOUT_MS } from '../services/env'
 import { applyResponseTransforms } from '../services/responseTransforms'
 import {
   createModelMessage,
@@ -45,16 +44,6 @@ const CONNECTION_LOST_MESSAGE =
 const NOT_CONNECTED_MESSAGE =
   'Not connected to the server. Please wait for it to reconnect.'
 
-// Not reactive state: a timer handle has no business in devtools or the UI.
-let streamWatchdog = null
-
-function clearStreamWatchdog() {
-  if (streamWatchdog) {
-    clearTimeout(streamWatchdog)
-    streamWatchdog = null
-  }
-}
-
 // Chunks can arrive far faster than is worth re-rendering, so they are
 // applied to the message in batches. Parsed chunks wait here (not reactive)
 // until the next flush.
@@ -87,7 +76,6 @@ function recordDebugRequest(payload) {
  * @property {string} messageId
  * @property {string} requestId
  * @property {string | null} [providerId]
- * @property {boolean} [watchIdle] Stop it if it stays silent too long.
  */
 
 // Orchestrates user intents that span stores: sending and streaming
@@ -201,7 +189,6 @@ export const useSessionStore = defineStore('session', {
     // --- Stream events ---
 
     _setGenerationState(status, stream = null, error = null) {
-      clearStreamWatchdog()
       // End/error handlers flush before getting here; anything left belongs
       // to a cancelled or superseded request.
       discardPendingChunks()
@@ -226,8 +213,6 @@ export const useSessionStore = defineStore('session', {
 
       const message = chats.findMessageByRequestId(stream.requestId)
       if (!message || message.status !== 'streaming') return false
-
-      this._armStreamWatchdog()
 
       // Parse now so a malformed chunk is still rejected in its ack.
       pendingChunks.push({
@@ -474,33 +459,6 @@ export const useSessionStore = defineStore('session', {
       })
     },
 
-    _armStreamWatchdog() {
-      clearStreamWatchdog()
-      const stream = this.generationState.stream
-      if (!this.isGenerating || !stream?.watchIdle) return
-      const { requestId } = stream
-      streamWatchdog = setTimeout(() => {
-        streamWatchdog = null
-        void this._handleStreamStall(requestId)
-      }, STREAM_IDLE_TIMEOUT_MS)
-    },
-
-    async _handleStreamStall(requestId) {
-      const stream = this.generationState.stream
-      if (!this.isGenerating || stream?.requestId !== requestId) return
-      const { chatId } = stream
-      const seconds = Math.round(STREAM_IDLE_TIMEOUT_MS / 1000)
-      // Finalize first so the backend's "aborted" reply to the cancel below
-      // finds the message already settled and is ignored.
-      const finishing = this.handleStreamError({
-        chatId,
-        requestId,
-        error: `No response from the server for ${seconds} seconds. Generation was stopped.`,
-      })
-      cancelBackendGeneration({ chatId, requestId })
-      await finishing
-    },
-
     // --- Generation ---
 
     async cancelGeneration() {
@@ -587,11 +545,6 @@ export const useSessionStore = defineStore('session', {
         messageId: modelMessage.id,
         requestId,
         providerId: requestConfig.providerId,
-        // Non-streaming replies and agent models legitimately stay silent for
-        // a long time, so only watch regular streaming requests for stalls.
-        watchIdle:
-          requestConfig.streaming !== false &&
-          requestConfig.providerId !== 'virtual',
       })
       chats.touchActiveChat()
       chats.bumpScrollSignal()
@@ -638,7 +591,6 @@ export const useSessionStore = defineStore('session', {
 
         recordDebugRequest(payload)
         startGeneration(payload)
-        this._armStreamWatchdog()
       } catch (error) {
         if (this.generationState.stream?.requestId !== requestId) return
         console.error('Failed to start generation:', error)

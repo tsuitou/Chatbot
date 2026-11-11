@@ -14,7 +14,6 @@ interface ImportMetaEnv {
   readonly VITE_DEFAULT_TOOL_CODE_EXECUTION?: string
   readonly VITE_ENABLE_DEBUG_PANEL?: string
   readonly VITE_MAX_UPLOAD_FILE_SIZE?: string
-  readonly VITE_STREAM_IDLE_TIMEOUT?: string
   readonly VITE_BACKEND?: 'local'
 }
 

@@ -67,18 +67,60 @@ function deriveClaudeThinking(meta) {
   }
 }
 
+// How each model family turns thinking off, and whether it thinks when the
+// request omits `thinking`. The Models API does not report either, so this
+// is keyed on the model ID:
+//   unsupported   — thinking is always on (Fable/Mythos, Opus 5.5): any
+//                   explicit off switch is a 400.
+//   between_tools — Sonnet 5.5: {type:"disabled"} is a 400; between_tools
+//                   is the off switch, only at effort high or below.
+//   disabled      — Opus 5 / Haiku 5.5 (effort high or below), Sonnet 5.
+//   omit          — older models think only when asked.
+const THINKING_ON_EFFORTS_ONLY = ['xhigh', 'max']
+
+export function claudeThinkingRule(modelId) {
+  const id = String(modelId || '')
+  if (/^claude-(fable|mythos)-/.test(id) || id.startsWith('claude-opus-5-5')) {
+    return { onByDefault: true, off: 'unsupported', offMaxEffort: null }
+  }
+  if (id.startsWith('claude-sonnet-5-5')) {
+    return { onByDefault: true, off: 'between_tools', offMaxEffort: 'high' }
+  }
+  if (id.startsWith('claude-sonnet-5')) {
+    return { onByDefault: true, off: 'disabled', offMaxEffort: null }
+  }
+  if (/^claude-(opus|haiku)-5/.test(id)) {
+    return { onByDefault: true, off: 'disabled', offMaxEffort: 'high' }
+  }
+  return { onByDefault: false, off: 'omit', offMaxEffort: null }
+}
+
+// Models that default to display:"omitted" stream empty thinking blocks
+// unless summaries are requested. That is every adaptive-only model (Opus
+// 4.7+) and every model that thinks by default; Opus/Sonnet 4.6 still accept
+// budget_tokens and already default to summarized.
+function adaptiveThinkingConfig(summarize) {
+  return summarize
+    ? { type: 'adaptive', display: 'summarized' }
+    : { type: 'adaptive' }
+}
+
 function buildThinkingParameter(meta, maxOutputTokens) {
   const thinking = deriveClaudeThinking(meta)
   if (!thinking.supported) return null
 
-  const specialValues = [{ label: 'Disabled', value: 0 }]
+  const rule = claudeThinkingRule(meta?.id)
+  const specialValues = []
+  if (rule.off !== 'unsupported') {
+    specialValues.push({ label: 'Disabled', value: 0 })
+  }
   if (thinking.adaptive) {
     specialValues.push({ label: 'Adaptive', value: -1 })
   }
 
   const rangeMax = positiveInteger(maxOutputTokens)
   return {
-    default: 'max',
+    default: rule.onByDefault && thinking.adaptive ? -1 : 'max',
     ui: {
       type: 'integer',
       label: 'Thinking Budget',
@@ -93,7 +135,14 @@ function buildThinkingParameter(meta, maxOutputTokens) {
         : {}),
       specialValues,
     },
-    api: { transform: 'claudeThinking', adaptiveSupported: thinking.adaptive },
+    api: {
+      transform: 'claudeThinking',
+      adaptiveSupported: thinking.adaptive,
+      summarize: rule.onByDefault || (thinking.adaptive && !thinking.enabled),
+      onByDefault: rule.onByDefault,
+      off: rule.off,
+      offMaxEffort: rule.offMaxEffort,
+    },
   }
 }
 
@@ -188,22 +237,38 @@ function applyClaudeModelMetadata(effective, meta) {
 }
 
 function claudeThinkingTransform({ config, value, definition }) {
-  const adaptiveSupported = definition?.api?.adaptiveSupported === true
+  const api = definition?.api || {}
+  const adaptiveSupported = api.adaptiveSupported === true
   const budget = Number(value)
+  const setAdaptive = () => {
+    config.thinking = adaptiveThinkingConfig(api.summarize === true)
+  }
 
   // Explicit "Adaptive" selection (-1).
   if (budget === -1) {
-    config.thinking = { type: 'adaptive' }
+    setAdaptive()
     return
   }
-  if (!Number.isFinite(budget) || budget < CLAUDE_MIN_THINKING_BUDGET) return
+  // Explicit "Disabled" selection (0).
+  if (budget === 0) {
+    if (api.off === 'disabled' || api.off === 'between_tools') {
+      config.thinking = { type: api.off }
+    } else if (api.off === 'unsupported') {
+      setAdaptive()
+    }
+    return
+  }
+  if (!Number.isFinite(budget) || budget < CLAUDE_MIN_THINKING_BUDGET) {
+    if (api.onByDefault) setAdaptive()
+    return
+  }
 
   // type:"enabled" with budget_tokens is deprecated and rejected (400) on
   // adaptive-capable models (Opus 4.6+/Fable 5). Map any positive budget to
   // adaptive there; keep the explicit budget only for legacy models that lack
   // adaptive thinking (e.g. Sonnet 4.5, Haiku 4.5).
   if (adaptiveSupported) {
-    config.thinking = { type: 'adaptive' }
+    setAdaptive()
     return
   }
 
@@ -214,6 +279,27 @@ function claudeThinkingTransform({ config, value, definition }) {
   const currentMax = config.max_tokens || CLAUDE_DEFAULT_MAX_TOKENS
   if (currentMax <= budget) {
     config.max_tokens = budget + CLAUDE_MIN_THINKING_BUDGET
+  }
+}
+
+// Covers what the per-parameter transform cannot see: a request that cleared
+// the thinking setting (or a model with no metadata) on a model that thinks by
+// default, and the effort ceiling that comes with switching thinking off.
+function finalizeClaudeThinking(config, modelName, definition) {
+  const rule = claudeThinkingRule(modelName)
+  if (!config.thinking && rule.onByDefault) {
+    config.thinking = adaptiveThinkingConfig(
+      definition?.api ? definition.api.summarize === true : true
+    )
+  }
+  const offTypes = ['disabled', 'between_tools']
+  const effort = config.output_config?.effort
+  if (
+    rule.offMaxEffort &&
+    offTypes.includes(config.thinking?.type) &&
+    THINKING_ON_EFFORTS_ONLY.includes(effort)
+  ) {
+    config.output_config.effort = rule.offMaxEffort
   }
 }
 
@@ -270,6 +356,7 @@ export class ClaudeProvider {
     const config = buildProviderConfig(parameters, requestParameters, {
       claudeThinking: claudeThinkingTransform,
     })
+    finalizeClaudeThinking(config, modelName, parameters?.thinkingBudget)
 
     const systemInstruction = resolveSystemInstruction({
       defaultSystemInstruction: this.defaultSystemInstruction,

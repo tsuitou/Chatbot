@@ -4,7 +4,6 @@ import { useChatsStore } from '../../src/stores/chats'
 import { useSessionStore } from '../../src/stores/session'
 import { useComposerStore } from '../../src/stores/composer'
 import * as socket from '../../src/services/socket'
-import { STREAM_IDLE_TIMEOUT_MS } from '../../src/services/env'
 
 const { events, db } = vi.hoisted(() => ({
   events: [],
@@ -122,78 +121,6 @@ describe('disconnect during generation', () => {
     await session.handleDisconnect()
     expect(session.generationState.status).toBe('idle')
     expect(events).toEqual([])
-  })
-})
-
-describe('stalled stream', () => {
-  it('stops the request after a silent period; each chunk resets the timer', async () => {
-    const { session } = setup()
-    const message = await startStreaming()
-
-    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS - 1000)
-    await session.handleStreamChunk(chunk('still alive'))
-    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS - 1000)
-    expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(session.isGenerating).toBe(true)
-
-    await vi.advanceTimersByTimeAsync(1000)
-    expect(socket.cancelBackendGeneration).toHaveBeenCalledWith({
-      chatId: 'a',
-      requestId: 'r',
-    })
-    expect(message.content.text).toBe('still alive')
-    expect(message.metadata.error).toMatch(/no response from the server/i)
-    expect(session.generationState.status).toBe('error')
-  })
-
-  it("ignores the backend's late aborted reply and chunks after the stall", async () => {
-    const { chats, session } = setup()
-    // Hold the error save open so the late events land while it is pending.
-    let releaseSave
-    const saving = new Promise((resolve) => {
-      releaseSave = () => resolve(true)
-    })
-    chats.persistActiveMessage = () => saving
-    const message = await startStreaming()
-    await session.handleStreamChunk(chunk('kept'))
-    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS)
-    expect(session.isGenerating).toBe(true)
-
-    expect(await session.handleStreamChunk(chunk(' late'))).toBe(false)
-    const ending = session.handleStreamEnd({
-      chatId: 'a',
-      requestId: 'r',
-      aborted: true,
-      reason: 'cancelled',
-    })
-    releaseSave()
-    await ending
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(message.status).toBe('completed')
-    expect(message.content.text).toBe('kept')
-    expect(message.metadata.finishReason).toBe('error')
-    expect(session.generationState.status).toBe('error')
-  })
-
-  it.each([
-    ['non-streaming requests', { ...STREAMING_CONFIG, streaming: false }],
-    ['agent models', { ...STREAMING_CONFIG, providerId: 'virtual' }],
-  ])('does not watch %s', async (_, requestConfig) => {
-    const { session } = setup()
-    await startStreaming(requestConfig)
-    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS * 10)
-    expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(session.isGenerating).toBe(true)
-  })
-
-  it('a normal completion clears the timer', async () => {
-    const { session } = setup()
-    await startStreaming()
-    await session.handleStreamEnd({ chatId: 'a', requestId: 'r' })
-    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS * 2)
-    expect(socket.cancelBackendGeneration).not.toHaveBeenCalled()
-    expect(session.generationState.status).toBe('idle')
   })
 })
 
